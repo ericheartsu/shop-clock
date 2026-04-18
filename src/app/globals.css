@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  height: 100%;
+  background: #f7f7f7;
+  color: #0a0a0a;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  overscroll-behavior-y: contain;
+}
+
+/* Don't block text selection inside inputs / notes */
+input,
+textarea {
+  -webkit-user-select: auto;
+  user-select: auto;
+}
+
+/* Big tap targets by default */
+button {
+  touch-action: manipulation;
+}

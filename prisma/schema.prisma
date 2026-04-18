@@ -1,0 +1,58 @@
+// Shop Clock — Phase 0
+// Standalone time-tracking for Craft MFG presses.
+// When HQ Print rolls out, write a migration script to fold these tables in.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model PhaseZeroJob {
+  id                    Int      @id @default(autoincrement())
+  printavoInvoiceNumber String   @unique
+  jobName               String?
+  totalQuantity         Int?
+  // true if we got real data from Printavo; false if user entered manually
+  printavoFetched       Boolean  @default(false)
+  createdAt             DateTime @default(now())
+
+  decorations PhaseZeroDecoration[]
+  timeEntries PhaseZeroTimeEntry[]
+}
+
+model PhaseZeroDecoration {
+  id         Int      @id @default(autoincrement())
+  jobId      Int
+  job        PhaseZeroJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  location   String   // "Front", "Back", "Neck Tag", etc. — freeform for Phase 0
+  method     String?  // "Screen Print", "DTG", "Transfer", etc. — freeform
+  colorCount Int?
+  createdAt  DateTime @default(now())
+
+  timeEntries PhaseZeroTimeEntry[]
+
+  @@index([jobId])
+}
+
+model PhaseZeroTimeEntry {
+  id           Int      @id @default(autoincrement())
+  jobId        Int
+  job          PhaseZeroJob @relation(fields: [jobId], references: [id])
+  decorationId Int?
+  decoration   PhaseZeroDecoration? @relation(fields: [decorationId], references: [id])
+  press        String   // one of PRESSES in src/lib/config.ts
+  phase        String   // "Setup" | "Production" | "Teardown"
+  startedAt    DateTime
+  endedAt      DateTime?
+  durationSec  Int?     // computed on stop
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  @@index([jobId])
+  @@index([decorationId])
+  @@index([press, phase])
+}
