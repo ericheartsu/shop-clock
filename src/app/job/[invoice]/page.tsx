@@ -36,6 +36,8 @@ export default function JobPage({
   const [colorCount, setColorCount] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [repullBusy, setRepullBusy] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -91,6 +93,31 @@ export default function JobPage({
     );
   }
 
+  async function repullPrintavo() {
+    if (repullBusy) return;
+    setRepullBusy(true);
+    setError(null);
+    setToast(null);
+    try {
+      const res = await fetch(
+        `/api/jobs/${encodeURIComponent(invoice)}/repull`,
+        { method: 'POST' },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data?.error ?? 'Re-pull failed');
+        return;
+      }
+      setToast('Pulled from Printavo');
+      setJob(data.job);
+      setTimeout(() => setToast(null), 3000);
+    } catch (err: any) {
+      setError(err?.message ?? 'Network error');
+    } finally {
+      setRepullBusy(false);
+    }
+  }
+
   return (
     <main className="min-h-screen flex flex-col">
       <BrandHeader crumbs={[`Invoice ${invoice}`]} />
@@ -108,7 +135,7 @@ export default function JobPage({
               {job.jobName && (
                 <div className="text-craft-grey text-sm mt-1">{job.jobName}</div>
               )}
-              <div className="flex gap-3 mt-2 text-sm">
+              <div className="flex gap-3 mt-2 text-sm items-center">
                 {typeof job.totalQuantity === 'number' && (
                   <span className="rounded-full bg-craft-cyan/10 text-craft-cyan px-2 py-0.5 font-semibold">
                     Qty {job.totalQuantity}
@@ -124,7 +151,20 @@ export default function JobPage({
                 >
                   {job.printavoFetched ? 'Printavo linked' : 'Manual entry'}
                 </span>
+                <button
+                  onClick={repullPrintavo}
+                  disabled={repullBusy}
+                  className="ml-auto text-xs font-semibold text-craft-cyan hover:underline disabled:opacity-50"
+                  title="Force a fresh pull of invoice + imprint data from Printavo"
+                >
+                  {repullBusy ? 'Pulling\u2026' : 'Re-pull Printavo'}
+                </button>
               </div>
+              {toast && (
+                <div className="mt-2 rounded-lg bg-craft-lime/20 border border-craft-lime text-craft-black px-3 py-2 text-xs font-semibold">
+                  {toast}
+                </div>
+              )}
             </section>
 
             <section>
