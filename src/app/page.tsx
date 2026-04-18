@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { BrandHeader } from '@/components/BrandHeader';
 import { ACTIVE_CLOCK_KEY, type ActiveClockPayload } from '@/lib/time';
@@ -13,6 +13,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState<ActiveClockPayload | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     try {
@@ -32,6 +33,8 @@ export default function Home() {
     } else {
       setInvoice((v) => (v + key).slice(0, 10));
     }
+    // keep focus on the hidden-but-real input so keyboard users can keep typing
+    inputRef.current?.focus();
   }
 
   async function lookup() {
@@ -78,11 +81,36 @@ export default function Home() {
           <span className="text-sm font-semibold text-craft-grey">
             Printavo Invoice #
           </span>
-          <div className="mt-1 rounded-2xl bg-white border-2 border-craft-grey/20 px-4 py-5 text-center shadow-inner">
-            <span className="text-5xl font-extrabold tracking-widest text-craft-black">
-              {invoice || <span className="text-craft-grey/40">——</span>}
-            </span>
-          </div>
+          {/*
+            Real <input> so physical keyboards (laptops) and native iOS/Android
+            numeric keyboards work. Visually styled to match the big-digit
+            display; the on-screen keypad below is still available for tablet
+            users who don't want to pop the soft keyboard.
+          */}
+          <input
+            ref={inputRef}
+            type="tel"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            autoComplete="off"
+            autoFocus
+            value={invoice}
+            onChange={(e) => {
+              // strip everything that isn't a digit, cap at 10
+              const cleaned = e.target.value.replace(/\D/g, '').slice(0, 10);
+              setInvoice(cleaned);
+              setError(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                lookup();
+              }
+            }}
+            placeholder="——"
+            aria-label="Printavo invoice number"
+            className="mt-1 w-full rounded-2xl bg-white border-2 border-craft-grey/20 px-4 py-5 text-center shadow-inner text-5xl font-extrabold tracking-widest text-craft-black outline-none focus:border-craft-cyan placeholder:text-craft-grey/40"
+          />
         </label>
 
         {error && (
@@ -95,6 +123,7 @@ export default function Home() {
           {KEYS.map((k) => (
             <button
               key={k}
+              type="button"
               onClick={() => press(k)}
               className={
                 'h-20 rounded-xl text-3xl font-bold shadow-sm active:scale-95 transition ' +
