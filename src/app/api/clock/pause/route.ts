@@ -3,6 +3,12 @@ import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * POST /api/clock/pause
+ * Body: { entryId: number }
+ * Sets `pausedAt = now()` on the entry. Idempotent-ish: if already paused,
+ * returns the existing state without clobbering the original pausedAt.
+ */
 export async function POST(req: Request) {
   let body: any;
   try {
@@ -12,8 +18,6 @@ export async function POST(req: Request) {
   }
 
   const entryId = Number(body?.entryId);
-  const notes = body?.notes ? String(body.notes).slice(0, 2000) : null;
-
   if (!Number.isFinite(entryId)) {
     return NextResponse.json({ error: 'Missing entryId' }, { status: 400 });
   }
@@ -21,38 +25,16 @@ export async function POST(req: Request) {
   const entry = await prisma.phaseZeroTimeEntry.findUnique({ where: { id: entryId } });
   if (!entry) return NextResponse.json({ error: 'Entry not found' }, { status: 404 });
   if (entry.endedAt) {
-    return NextResponse.json({ error: 'Entry already stopped', entry });
+    return NextResponse.json({ error: 'Entry already stopped' }, { status: 400 });
   }
-
-  const endedAt = new Date();
-
-  // If we're stopping while paused, fold the current paused span into the
-  // cumulative paused duration so the final durationSec is accurate.
-  let pausedDurationSec = entry.pausedDurationSec;
   if (entry.pausedAt) {
-    const addSec = Math.max(
-      0,
-      Math.round((endedAt.getTime() - entry.pausedAt.getTime()) / 1000),
-    );
-    pausedDurationSec += addSec;
+    // Already paused — return as-is so the UI can sync.
+    return NextResponse.json({ entry });
   }
-
-  const grossSec = Math.max(
-    0,
-    Math.round((endedAt.getTime() - entry.startedAt.getTime()) / 1000),
-  );
-  const durationSec = Math.max(0, grossSec - pausedDurationSec);
 
   const updated = await prisma.phaseZeroTimeEntry.update({
     where: { id: entryId },
-    data: {
-      endedAt,
-      durationSec,
-      pausedDurationSec,
-      pausedAt: null,
-      notes,
-    },
+    data: { pausedAt: new Date() },
   });
-
   return NextResponse.json({ entry: updated });
 }

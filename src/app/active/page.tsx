@@ -15,6 +15,7 @@ export default function ActivePage() {
   const [elapsed, setElapsed] = useState(0);
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
+  const [pauseBusy, setPauseBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -35,13 +36,77 @@ export default function ActivePage() {
   useEffect(() => {
     if (!active) return;
     const started = new Date(active.startedAt).getTime();
-    const update = () => setElapsed((Date.now() - started) / 1000);
+    const baseAccumulated = active.pausedDurationSec ?? 0;
+    const pausedSince = active.pausedAt
+      ? new Date(active.pausedAt).getTime()
+      : null;
+
+    const update = () => {
+      const now = Date.now();
+      const gross = (now - started) / 1000;
+      // Paused time = baseline + (now - pausedSince) if currently paused
+      const currentPause = pausedSince ? (now - pausedSince) / 1000 : 0;
+      const net = gross - baseAccumulated - currentPause;
+      setElapsed(Math.max(0, net));
+    };
     update();
     tickRef.current = setInterval(update, 1000);
     return () => {
       if (tickRef.current) clearInterval(tickRef.current);
     };
   }, [active]);
+
+  function persist(next: ActiveClockPayload) {
+    localStorage.setItem(ACTIVE_CLOCK_KEY, JSON.stringify(next));
+    setActive(next);
+  }
+
+  async function togglePause() {
+    if (!active || pauseBusy) return;
+    setPauseBusy(true);
+    setError(null);
+    try {
+      if (active.pausedAt) {
+        // Resume
+        const res = await fetch('/api/clock/resume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entryId: active.entryId }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data?.error ?? 'Failed to resume');
+          return;
+        }
+        persist({
+          ...active,
+          pausedAt: null,
+          pausedDurationSec: data.entry.pausedDurationSec ?? active.pausedDurationSec ?? 0,
+        });
+      } else {
+        // Pause
+        const res = await fetch('/api/clock/pause', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entryId: active.entryId }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data?.error ?? 'Failed to pause');
+          return;
+        }
+        persist({
+          ...active,
+          pausedAt: data.entry.pausedAt ?? new Date().toISOString(),
+          pausedDurationSec: data.entry.pausedDurationSec ?? active.pausedDurationSec ?? 0,
+        });
+      }
+    } catch (err: any) {
+      setError(err?.message ?? 'Network error');
+    } finally {
+      setPauseBusy(false);
+    }
+  }
 
   async function stop() {
     if (!active) return;
@@ -62,7 +127,17 @@ export default function ActivePage() {
         return;
       }
       localStorage.removeItem(ACTIVE_CLOCK_KEY);
-      router.replace('/');
+      // Return to the phase picker for the SAME decoration + press so the
+      // next natural action ("I just finished Setup, now run Production")
+      // is one tap away. Fix #5.
+      const { invoice, decorationId, press } = active;
+      if (decorationId != null) {
+        router.replace(
+          `/job/${encodeURIComponent(invoice)}/${decorationId}/phase?press=${encodeURIComponent(press)}`,
+        );
+      } else {
+        router.replace(`/job/${encodeURIComponent(invoice)}`);
+      }
     } catch (err: any) {
       setError(err?.message ?? 'Network error');
     } finally {
@@ -72,6 +147,8 @@ export default function ActivePage() {
 
   if (!active) return null;
 
+  const isPaused = !!active.pausedAt;
+
   return (
     <main className="min-h-screen flex flex-col bg-craft-black text-white">
       <BrandHeader crumbs={[`Invoice ${active.invoice}`, active.press, active.phase]} />
@@ -80,6 +157,11 @@ export default function ActivePage() {
         <div className="text-center">
           <div className="text-xs uppercase tracking-widest text-white/60">
             {active.phase}
+            {isPaused && (
+              <span className="ml-2 inline-block rounded-full bg-craft-orange text-white px-2 py-0.5 text-[10px] font-extrabold">
+                PAUSED
+              </span>
+            )}
           </div>
           <div className="text-lg font-bold text-white/80 mt-1">
             {active.press} {'\u2022'} Invoice {active.invoice}
@@ -88,7 +170,10 @@ export default function ActivePage() {
 
         <div className="text-center">
           <div
-            className="font-extrabold tabular-nums leading-none"
+            className={
+              'font-extrabold tabular-nums leading-none transition-opacity ' +
+              (isPaused ? 'opacity-60' : '')
+            }
             style={{ fontSize: 'clamp(6rem, 22vw, 14rem)' }}
           >
             {formatDuration(elapsed)}
@@ -114,13 +199,31 @@ export default function ActivePage() {
           </div>
         )}
 
-        <button
-          onClick={stop}
-          disabled={busy}
-          className="w-full max-w-md h-24 rounded-2xl bg-red-600 hover:bg-red-700 text-white text-4xl font-extrabold shadow-2xl active:scale-[0.98] disabled:opacity-60"
-        >
-          {busy ? 'STOPPING\u2026' : 'STOP'}
-        </button>
+        <div className="w-full max-w-md flex gap-3">
+          <button
+            onClick={togglePause}
+            disabled={busy || pauseBusy}
+            className={
+              'h-24 flex-1 rounded-2xl text-2xl font-extrabold shadow-xl active:scale-[0.98] disabled:opacity-60 ' +
+              (isPaused
+                ? 'bg-craft-lime text-craft-black hover:bg-craft-lime/90'
+                : 'bg-craft-orange text-white hover:bg-craft-orange/90')
+            }
+          >
+            {pauseBusy
+              ? '\u2026'
+              : isPaused
+              ? 'RESUME'
+              : 'PAUSE'}
+          </button>
+          <button
+            onClick={stop}
+            disabled={busy}
+            className="h-24 flex-[2] rounded-2xl bg-red-600 hover:bg-red-700 text-white text-4xl font-extrabold shadow-2xl active:scale-[0.98] disabled:opacity-60"
+          >
+            {busy ? 'STOPPING\u2026' : 'STOP'}
+          </button>
+        </div>
       </div>
     </main>
   );

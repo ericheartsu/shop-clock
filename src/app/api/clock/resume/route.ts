@@ -3,6 +3,11 @@ import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * POST /api/clock/resume
+ * Body: { entryId: number }
+ * Adds (now - pausedAt) to pausedDurationSec, clears pausedAt.
+ */
 export async function POST(req: Request) {
   let body: any;
   try {
@@ -12,8 +17,6 @@ export async function POST(req: Request) {
   }
 
   const entryId = Number(body?.entryId);
-  const notes = body?.notes ? String(body.notes).slice(0, 2000) : null;
-
   if (!Number.isFinite(entryId)) {
     return NextResponse.json({ error: 'Missing entryId' }, { status: 400 });
   }
@@ -21,38 +24,25 @@ export async function POST(req: Request) {
   const entry = await prisma.phaseZeroTimeEntry.findUnique({ where: { id: entryId } });
   if (!entry) return NextResponse.json({ error: 'Entry not found' }, { status: 404 });
   if (entry.endedAt) {
-    return NextResponse.json({ error: 'Entry already stopped', entry });
+    return NextResponse.json({ error: 'Entry already stopped' }, { status: 400 });
+  }
+  if (!entry.pausedAt) {
+    // Not paused — nothing to resume. Return existing state.
+    return NextResponse.json({ entry });
   }
 
-  const endedAt = new Date();
-
-  // If we're stopping while paused, fold the current paused span into the
-  // cumulative paused duration so the final durationSec is accurate.
-  let pausedDurationSec = entry.pausedDurationSec;
-  if (entry.pausedAt) {
-    const addSec = Math.max(
-      0,
-      Math.round((endedAt.getTime() - entry.pausedAt.getTime()) / 1000),
-    );
-    pausedDurationSec += addSec;
-  }
-
-  const grossSec = Math.max(
+  const now = new Date();
+  const addSec = Math.max(
     0,
-    Math.round((endedAt.getTime() - entry.startedAt.getTime()) / 1000),
+    Math.round((now.getTime() - entry.pausedAt.getTime()) / 1000),
   );
-  const durationSec = Math.max(0, grossSec - pausedDurationSec);
 
   const updated = await prisma.phaseZeroTimeEntry.update({
     where: { id: entryId },
     data: {
-      endedAt,
-      durationSec,
-      pausedDurationSec,
       pausedAt: null,
-      notes,
+      pausedDurationSec: entry.pausedDurationSec + addSec,
     },
   });
-
   return NextResponse.json({ entry: updated });
 }

@@ -18,4 +18,8 @@ export interface ActiveClockPayload {
   press: string;
   phase: string;
   startedAt: string; // ISO
+  /** ISO timestamp when the current pause began, or null if running */
+  pausedAt?: string | null;
+  /** Cumulative paused seconds from all *completed* pause spans */
+  pausedDurationSec?: number;
 }

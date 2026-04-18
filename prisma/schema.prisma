@@ -39,18 +39,22 @@ model PhaseZeroDecoration {
 }
 
 model PhaseZeroTimeEntry {
-  id           Int      @id @default(autoincrement())
-  jobId        Int
-  job          PhaseZeroJob @relation(fields: [jobId], references: [id])
-  decorationId Int?
-  decoration   PhaseZeroDecoration? @relation(fields: [decorationId], references: [id])
-  press        String   // one of PRESSES in src/lib/config.ts
-  phase        String   // "Setup" | "Production" | "Teardown"
-  startedAt    DateTime
-  endedAt      DateTime?
-  durationSec  Int?     // computed on stop
-  notes        String?
-  createdAt    DateTime @default(now())
+  id                Int      @id @default(autoincrement())
+  jobId             Int
+  job               PhaseZeroJob @relation(fields: [jobId], references: [id])
+  decorationId      Int?
+  decoration        PhaseZeroDecoration? @relation(fields: [decorationId], references: [id])
+  press             String   // one of PRESSES in src/lib/config.ts
+  phase             String   // "Setup" | "Production" | "Teardown"
+  startedAt         DateTime
+  endedAt           DateTime?
+  durationSec       Int?     // computed on stop (startedAt -> endedAt, minus pausedDurationSec)
+  // Pause tracking — nullable pausedAt means "currently paused since <ts>"
+  // pausedDurationSec accumulates whenever the user resumes.
+  pausedAt          DateTime?
+  pausedDurationSec Int      @default(0)
+  notes             String?
+  createdAt         DateTime @default(now())
 
   @@index([jobId])
   @@index([decorationId])
