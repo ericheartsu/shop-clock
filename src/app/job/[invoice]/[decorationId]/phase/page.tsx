@@ -66,6 +66,8 @@ export default function PhasePickerPage({
         press,
         phase,
         startedAt: data.entry.startedAt,
+        pausedAt: null,
+        pausedDurationSec: 0,
       };
       localStorage.setItem(ACTIVE_CLOCK_KEY, JSON.stringify(payload));
       router.push('/active');
