@@ -12,6 +12,15 @@ const API_TOKEN = process.env.PRINTAVO_API_TOKEN ?? '';
 
 // Fields we need for Phase 0: visual id, name, quantities, line items +
 // (optionally) any imprint/decoration metadata Printavo exposes.
+// Printavo v2 schema notes (confirmed 2026-04-18 from docs):
+//   LineItemGroup.imprints -> ImprintConnection (paginated, use `nodes`)
+//   Imprint fields: id, details (String), typeOfWork (TypeOfWork),
+//                   mockups (MockupConnection), ...
+//   TypeOfWork.name is the human label ("Screen Print", "DTG", ...)
+//   Mockup.fullImageUrl is the image URL
+// Imprints don't have a dedicated `location` field — `details` holds
+// freeform description ("Front", "Back", "Neck Tag") and we treat it
+// as the location for Shop Clock purposes.
 const DETAIL_FIELDS = `
   id
   visualId
@@ -19,6 +28,14 @@ const DETAIL_FIELDS = `
   lineItemGroups {
     nodes {
       position
+      imprints(first: 20) {
+        nodes {
+          id
+          details
+          typeOfWork { id name }
+          mockups(first: 1) { nodes { fullImageUrl } }
+        }
+      }
       lineItems {
         nodes {
           id
@@ -59,8 +76,16 @@ export interface PrintavoLineItem {
   sizes: PrintavoSize[];
 }
 
+export interface PrintavoImprint {
+  id: string;
+  details: string | null;
+  typeOfWork: { id: string; name: string } | null;
+  mockups: { nodes: Array<{ fullImageUrl: string | null }> };
+}
+
 export interface PrintavoLineItemGroup {
   position: number;
+  imprints?: { nodes: PrintavoImprint[] };
   lineItems: { nodes: PrintavoLineItem[] };
 }
 
@@ -71,12 +96,50 @@ export interface PrintavoOrder {
   lineItemGroups: { nodes: PrintavoLineItemGroup[] };
 }
 
+/** Flattened imprint record for the Shop Clock DB. */
+export interface ExtractedDecoration {
+  location: string; // from imprint.details, fallback "Imprint N"
+  method: string | null; // from imprint.typeOfWork.name
+  mockupUrl: string | null;
+}
+
 export interface PrintavoLookupResult {
   ok: boolean;
   order?: PrintavoOrder;
   totalQuantity?: number;
   jobName?: string;
+  decorations?: ExtractedDecoration[];
   error?: string;
+}
+
+/**
+ * Flatten imprints across all lineItemGroups into a deduped decoration
+ * list. `details` is freeform in Printavo; we use it verbatim as location
+ * ("Front", "Back", "Neck Tag", etc.) and fall back to a positional
+ * label if the user left it blank.
+ */
+function extractDecorations(order: PrintavoOrder): ExtractedDecoration[] {
+  const out: ExtractedDecoration[] = [];
+  const seen = new Set<string>();
+  let n = 1;
+  for (const g of order.lineItemGroups?.nodes ?? []) {
+    for (const imp of g.imprints?.nodes ?? []) {
+      const rawLocation = (imp.details ?? '').trim();
+      const location = rawLocation || `Imprint ${n}`;
+      const method = imp.typeOfWork?.name?.trim() || null;
+      const mockupUrl = imp.mockups?.nodes?.[0]?.fullImageUrl ?? null;
+
+      // dedupe on (location + method) to avoid creating duplicates if the
+      // same design appears in multiple line item groups.
+      const key = `${location.toLowerCase()}|${(method ?? '').toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      out.push({ location, method, mockupUrl });
+      n++;
+    }
+  }
+  return out;
 }
 
 function totalQuantity(order: PrintavoOrder): number {
@@ -141,6 +204,7 @@ export async function lookupPrintavoInvoice(
       order: node,
       totalQuantity: totalQuantity(node),
       jobName: node.nickname ?? undefined,
+      decorations: extractDecorations(node),
     };
   } catch (err: any) {
     const msg = err?.message ?? String(err);
