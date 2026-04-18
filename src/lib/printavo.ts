@@ -50,10 +50,13 @@ const DETAIL_FIELDS = `
   }
 `;
 
+// Fetch up to 20 matches — Printavo search is fuzzy and will match invoice
+// numbers appearing as substrings of PO numbers, customer names, etc.
+// We filter for an exact visualId match server-side after retrieval.
 function buildSearchQuery(visualId: string): string {
   const safe = visualId.replace(/"/g, '');
   return `{
-    orders(first: 1, query: "${safe}") {
+    orders(first: 20, query: "${safe}") {
       nodes {
         ... on Quote { ${DETAIL_FIELDS} }
         ... on Invoice { ${DETAIL_FIELDS} }
@@ -194,7 +197,11 @@ export async function lookupPrintavoInvoice(
       return { ok: false, error: msg };
     }
 
-    const node = json?.data?.orders?.nodes?.[0] as PrintavoOrder | undefined;
+    const nodes = (json?.data?.orders?.nodes ?? []) as PrintavoOrder[];
+    // Strict exact match — Printavo search is fuzzy (matches invoice # as
+    // substring of PO numbers etc.). Without this check we'd return the
+    // wrong job. Mirrors the pattern in hq-print's enrich-printavo-garments.ts.
+    const node = nodes.find((n) => n?.visualId === invoice);
     if (!node) {
       return { ok: false, error: 'Invoice not found' };
     }
