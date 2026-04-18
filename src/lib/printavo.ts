@@ -171,7 +171,16 @@ export async function lookupPrintavoInvoice(
     // Strict match — if Printavo's fuzzy search returned a different
     // invoice (PO substring collision), treat as not-found. User enters
     // decorations manually for this invoice.
-    if (!node || node.visualId !== invoice) {
+    if (!node) {
+      console.warn(`[printavo] no nodes returned for invoice "${invoice}"`);
+      return { ok: false, error: 'Invoice not found' };
+    }
+    // Cast to String to defend against visualId being returned as a number.
+    const returnedVisualId = String(node.visualId ?? '');
+    if (returnedVisualId !== invoice) {
+      console.warn(
+        `[printavo] visualId mismatch: wanted "${invoice}" (${typeof invoice}), got "${node.visualId}" (${typeof node.visualId})`,
+      );
       return { ok: false, error: 'Invoice not found' };
     }
 
