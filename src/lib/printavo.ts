@@ -10,42 +10,26 @@ const API_URL = process.env.PRINTAVO_API_URL ?? 'https://www.printavo.com/api/v2
 const API_EMAIL = process.env.PRINTAVO_API_EMAIL ?? '';
 const API_TOKEN = process.env.PRINTAVO_API_TOKEN ?? '';
 
-// Fields we need for Phase 0: visual id, name, quantities, line items +
-// (optionally) any imprint/decoration metadata Printavo exposes.
-// Printavo v2 schema notes (confirmed 2026-04-18 from docs):
-//   LineItemGroup.imprints -> ImprintConnection (paginated, use `nodes`)
-//   Imprint fields: id, details (String), typeOfWork (TypeOfWork),
-//                   mockups (MockupConnection), ...
-//   TypeOfWork.name is the human label ("Screen Print", "DTG", ...)
-//   Mockup.fullImageUrl is the image URL
+// MINIMAL fields — only what Shop Clock actually consumes. Printavo has
+// a 25k GraphQL complexity limit; bloated queries with first:100 exploded
+// to 913k. Dropped: id's, position, mockups (not displayed), lineItem
+// metadata (description/itemNumber/color/price), size names. Imprints
+// capped at 5 per group (no job in practice has more).
 // Imprints don't have a dedicated `location` field — `details` holds
 // freeform description ("Front", "Back", "Neck Tag") and we treat it
 // as the location for Shop Clock purposes.
 const DETAIL_FIELDS = `
-  id
   visualId
   nickname
   lineItemGroups {
     nodes {
-      position
-      imprints(first: 20) {
+      imprints(first: 5) {
         nodes {
-          id
           details
-          typeOfWork { id name }
-          mockups(first: 1) { nodes { fullImageUrl } }
+          typeOfWork { name }
         }
       }
-      lineItems {
-        nodes {
-          id
-          description
-          itemNumber
-          color
-          price
-          sizes { size count }
-        }
-      }
+      lineItems { nodes { sizes { count } } }
     }
   }
 `;
@@ -71,29 +55,20 @@ export interface PrintavoSize {
 }
 
 export interface PrintavoLineItem {
-  id: string;
-  description: string;
-  itemNumber: string;
-  color: string;
-  price: number;
   sizes: PrintavoSize[];
 }
 
 export interface PrintavoImprint {
-  id: string;
   details: string | null;
-  typeOfWork: { id: string; name: string } | null;
-  mockups: { nodes: Array<{ fullImageUrl: string | null }> };
+  typeOfWork: { name: string } | null;
 }
 
 export interface PrintavoLineItemGroup {
-  position: number;
   imprints?: { nodes: PrintavoImprint[] };
   lineItems: { nodes: PrintavoLineItem[] };
 }
 
 export interface PrintavoOrder {
-  id: string;
   visualId: string;
   nickname: string | null;
   lineItemGroups: { nodes: PrintavoLineItemGroup[] };
@@ -103,7 +78,6 @@ export interface PrintavoOrder {
 export interface ExtractedDecoration {
   location: string; // from imprint.details, fallback "Imprint N"
   method: string | null; // from imprint.typeOfWork.name
-  mockupUrl: string | null;
 }
 
 export interface PrintavoLookupResult {
@@ -130,7 +104,6 @@ function extractDecorations(order: PrintavoOrder): ExtractedDecoration[] {
       const rawLocation = (imp.details ?? '').trim();
       const location = rawLocation || `Imprint ${n}`;
       const method = imp.typeOfWork?.name?.trim() || null;
-      const mockupUrl = imp.mockups?.nodes?.[0]?.fullImageUrl ?? null;
 
       // dedupe on (location + method) to avoid creating duplicates if the
       // same design appears in multiple line item groups.
@@ -138,7 +111,7 @@ function extractDecorations(order: PrintavoOrder): ExtractedDecoration[] {
       if (seen.has(key)) continue;
       seen.add(key);
 
-      out.push({ location, method, mockupUrl });
+      out.push({ location, method });
       n++;
     }
   }
