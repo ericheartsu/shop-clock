@@ -50,13 +50,13 @@ const DETAIL_FIELDS = `
   }
 `;
 
-// Fetch up to 20 matches — Printavo search is fuzzy and will match invoice
-// numbers appearing as substrings of PO numbers, customer names, etc.
-// We filter for an exact visualId match server-side after retrieval.
+// Fetch up to 100 matches — Printavo search is fuzzy and ranks PO-number
+// matches (and other substring hits) higher than exact visualId matches.
+// We cast a wide net, then strict-filter by visualId server-side.
 function buildSearchQuery(visualId: string): string {
   const safe = visualId.replace(/"/g, '');
   return `{
-    orders(first: 20, query: "${safe}") {
+    orders(first: 100, query: "${safe}") {
       nodes {
         ... on Quote { ${DETAIL_FIELDS} }
         ... on Invoice { ${DETAIL_FIELDS} }
