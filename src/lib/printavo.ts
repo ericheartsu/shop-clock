@@ -23,8 +23,11 @@ const API_URL = process.env.PRINTAVO_API_URL ?? 'https://www.printavo.com/api/v2
 const API_EMAIL = process.env.PRINTAVO_API_EMAIL ?? '';
 const API_TOKEN = process.env.PRINTAVO_API_TOKEN ?? '';
 
-// Fields fetched on the single matched order. Imprint `details` is freeform
-// and treated as the decoration location ("Front", "Back", "Neck Tag").
+// Minimum fields to keep complexity safe across first:25 orders.
+// lineItems/sizes are dropped — Printavo's search is too fuzzy for
+// first:1 (saw "42422" → visualId "19644" top match), so we need
+// wide retrieval. totalQuantity is not available from Printavo in
+// Phase 0; the UI tolerates null.
 const DETAIL_FIELDS = `
   visualId
   nickname
@@ -36,19 +39,9 @@ const DETAIL_FIELDS = `
           typeOfWork { name }
         }
       }
-      lineItems { nodes { sizes { count } } }
     }
   }
 `;
-
-export interface PrintavoSize {
-  size: string;
-  count: number | null;
-}
-
-export interface PrintavoLineItem {
-  sizes: PrintavoSize[];
-}
 
 export interface PrintavoImprint {
   details: string | null;
@@ -57,7 +50,6 @@ export interface PrintavoImprint {
 
 export interface PrintavoLineItemGroup {
   imprints?: { nodes: PrintavoImprint[] };
-  lineItems: { nodes: PrintavoLineItem[] };
 }
 
 export interface PrintavoOrder {
@@ -84,7 +76,7 @@ export interface PrintavoLookupResult {
 function buildSearchQuery(invoice: string): string {
   const safe = invoice.replace(/"/g, '');
   return `{
-    orders(first: 1, query: "${safe}") {
+    orders(first: 25, query: "${safe}") {
       nodes {
         ... on Quote { ${DETAIL_FIELDS} }
         ... on Invoice { ${DETAIL_FIELDS} }
@@ -116,16 +108,10 @@ function extractDecorations(order: PrintavoOrder): ExtractedDecoration[] {
   return out;
 }
 
-function totalQuantity(order: PrintavoOrder): number {
-  let total = 0;
-  for (const g of order.lineItemGroups?.nodes ?? []) {
-    for (const item of g.lineItems?.nodes ?? []) {
-      for (const sz of item.sizes ?? []) {
-        if (typeof sz.count === 'number') total += sz.count;
-      }
-    }
-  }
-  return total;
+// Phase 0: Printavo totalQuantity dropped from the query to stay under
+// complexity. Always returns 0 — UI can show blank / "—" for qty.
+function totalQuantity(_order: PrintavoOrder): number {
+  return 0;
 }
 
 /**
@@ -167,19 +153,14 @@ export async function lookupPrintavoInvoice(
       return { ok: false, error: msg };
     }
 
-    const node = (json?.data?.orders?.nodes?.[0] ?? null) as PrintavoOrder | null;
-    // Strict match — if Printavo's fuzzy search returned a different
-    // invoice (PO substring collision), treat as not-found. User enters
-    // decorations manually for this invoice.
+    const nodes = (json?.data?.orders?.nodes ?? []) as PrintavoOrder[];
+    // Strict filter across the 25 fuzzy matches — the exact visualId may
+    // not be top-ranked (saw "42422" → "19644" top match).
+    const node = nodes.find((n) => String(n?.visualId ?? '') === invoice);
     if (!node) {
-      console.warn(`[printavo] no nodes returned for invoice "${invoice}"`);
-      return { ok: false, error: 'Invoice not found' };
-    }
-    // Cast to String to defend against visualId being returned as a number.
-    const returnedVisualId = String(node.visualId ?? '');
-    if (returnedVisualId !== invoice) {
+      const returned = nodes.map((n) => n?.visualId).filter(Boolean).slice(0, 25);
       console.warn(
-        `[printavo] visualId mismatch: wanted "${invoice}" (${typeof invoice}), got "${node.visualId}" (${typeof node.visualId})`,
+        `[printavo] no visualId match for "${invoice}". Returned ${nodes.length}: ${JSON.stringify(returned)}`,
       );
       return { ok: false, error: 'Invoice not found' };
     }
