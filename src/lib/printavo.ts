@@ -102,8 +102,9 @@ async function findMatchingOrderId(
   invoice: string,
 ): Promise<string | null> {
   const safe = invoice.replace(/"/g, '');
+  // Printavo caps `first` at 25 on the orders connection.
   const query = `{
-    orders(first: 100, query: "${safe}") {
+    orders(first: 25, query: "${safe}") {
       nodes {
         ... on Quote { id visualId }
         ... on Invoice { id visualId }
