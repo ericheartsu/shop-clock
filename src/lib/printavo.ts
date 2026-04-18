@@ -5,12 +5,18 @@
  * Auth: two headers `email` and `token` (NOT Authorization).
  * Reference: C:\Dev\hq-print\scripts\enrich-printavo-garments.ts
  *
- * Printavo caps GraphQL queries at 25k complexity. Fuzzy search on a
- * 5-digit invoice routinely returns 100+ substring matches (PO numbers,
- * customer refs). Two-query strategy:
- *   1. Minimal search (id + visualId only) for first:100 -> find match.
- *   2. Relay `node(id: ...)` single-fetch for full detail.
- * Each query stays well under the 25k limit.
+ * Printavo constraints (discovered 2026-04-18):
+ *   - `orders(first:)` hard-capped at 25
+ *   - No `node(id:)` root query
+ *   - ~25k GraphQL complexity budget
+ *   - Search is fuzzy: "42417" matches PO numbers containing 42417,
+ *     sometimes outranking the exact-visualId invoice
+ *
+ * Strategy: mirror hq-print/scripts/enrich-printavo-garments.ts —
+ * single first:1 search with strict visualId equality check. If the
+ * top match isn't the exact invoice, treat as not-found and let the
+ * caller fall through to manual decoration entry. This is how hq-print
+ * enriched 30,582 invoices (1,984 no-match outliers accepted).
  */
 
 const API_URL = process.env.PRINTAVO_API_URL ?? 'https://www.printavo.com/api/v2';
@@ -75,62 +81,16 @@ export interface PrintavoLookupResult {
   error?: string;
 }
 
-/** Low-level Printavo fetch. Returns raw parsed JSON or throws. */
-async function printavoFetch(query: string): Promise<any> {
-  const res = await fetch(API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      email: API_EMAIL,
-      token: API_TOKEN,
-    },
-    body: JSON.stringify({ query }),
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
-  }
-  const json = await res.json();
-  if (json.errors) {
-    throw new Error(`GraphQL: ${JSON.stringify(json.errors).slice(0, 300)}`);
-  }
-  return json.data;
-}
-
-/** Query 1: minimal fields, wide search, low complexity. */
-async function findMatchingOrderId(
-  invoice: string,
-): Promise<string | null> {
+function buildSearchQuery(invoice: string): string {
   const safe = invoice.replace(/"/g, '');
-  // Printavo caps `first` at 25 on the orders connection.
-  const query = `{
-    orders(first: 25, query: "${safe}") {
+  return `{
+    orders(first: 1, query: "${safe}") {
       nodes {
-        ... on Quote { id visualId }
-        ... on Invoice { id visualId }
+        ... on Quote { ${DETAIL_FIELDS} }
+        ... on Invoice { ${DETAIL_FIELDS} }
       }
     }
   }`;
-  const data = await printavoFetch(query);
-  const nodes = (data?.orders?.nodes ?? []) as Array<{
-    id: string;
-    visualId: string;
-  }>;
-  const match = nodes.find((n) => n?.visualId === invoice);
-  return match?.id ?? null;
-}
-
-/** Query 2: single order by Relay node id, full detail. */
-async function fetchOrderById(id: string): Promise<PrintavoOrder | null> {
-  const safe = id.replace(/"/g, '');
-  const query = `{
-    node(id: "${safe}") {
-      ... on Quote { ${DETAIL_FIELDS} }
-      ... on Invoice { ${DETAIL_FIELDS} }
-    }
-  }`;
-  const data = await printavoFetch(query);
-  return (data?.node ?? null) as PrintavoOrder | null;
 }
 
 function extractDecorations(order: PrintavoOrder): ExtractedDecoration[] {
@@ -183,22 +143,44 @@ export async function lookupPrintavoInvoice(
   }
 
   try {
-    const orderId = await findMatchingOrderId(invoice);
-    if (!orderId) {
-      return { ok: false, error: 'Invoice not found' };
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        email: API_EMAIL,
+        token: API_TOKEN,
+      },
+      body: JSON.stringify({ query: buildSearchQuery(invoice) }),
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (!res.ok) {
+      const msg = `Printavo HTTP ${res.status}`;
+      console.error('[printavo]', msg);
+      return { ok: false, error: msg };
     }
 
-    const order = await fetchOrderById(orderId);
-    if (!order || order.visualId !== invoice) {
-      return { ok: false, error: 'Invoice detail mismatch' };
+    const json: any = await res.json();
+    if (json.errors) {
+      const msg = `Printavo GraphQL: ${JSON.stringify(json.errors).slice(0, 300)}`;
+      console.error('[printavo]', msg);
+      return { ok: false, error: msg };
+    }
+
+    const node = (json?.data?.orders?.nodes?.[0] ?? null) as PrintavoOrder | null;
+    // Strict match — if Printavo's fuzzy search returned a different
+    // invoice (PO substring collision), treat as not-found. User enters
+    // decorations manually for this invoice.
+    if (!node || node.visualId !== invoice) {
+      return { ok: false, error: 'Invoice not found' };
     }
 
     return {
       ok: true,
-      order,
-      totalQuantity: totalQuantity(order),
-      jobName: order.nickname ?? undefined,
-      decorations: extractDecorations(order),
+      order: node,
+      totalQuantity: totalQuantity(node),
+      jobName: node.nickname ?? undefined,
+      decorations: extractDecorations(node),
     };
   } catch (err: any) {
     const msg = err?.message ?? String(err);
