@@ -1,0 +1,14 @@
+Running Prisma migration against Neon... 
+==================================== 
+Environment variables loaded from .env
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": PostgreSQL database "neondb", schema "public" at "ep-frosty-mountain-ancy2ir7-pooler.c-6.us-east-1.aws.neon.tech"
+
+Your database is now in sync with your Prisma schema. Done in 2.44s
+
+Running generate... (Use --skip-generate to skip the generators)
+[2K[1A[2K[GRunning generate... - Prisma Client
+[2K[1A[2K[G✔ Generated Prisma Client (v5.22.0) to .\node_modules\@prisma\client in 57ms
+
+==================================== 
+DONE. Exit code: 0 

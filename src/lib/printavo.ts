@@ -26,8 +26,8 @@ const API_TOKEN = process.env.PRINTAVO_API_TOKEN ?? '';
 // Minimum fields to keep complexity safe across first:25 orders.
 // lineItems/sizes are dropped — Printavo's search is too fuzzy for
 // first:1 (saw "42422" → visualId "19644" top match), so we need
-// wide retrieval. totalQuantity is not available from Printavo in
-// Phase 0; the UI tolerates null.
+// wide retrieval. Quantity is fetched in a separate narrower follow-up
+// call (see fetchQuantityForInvoice).
 const DETAIL_FIELDS = `
   visualId
   nickname
@@ -37,6 +37,24 @@ const DETAIL_FIELDS = `
         nodes {
           details
           typeOfWork { name }
+        }
+      }
+    }
+  }
+`;
+
+// Follow-up query: fetch line-item sizes for an already-matched invoice so
+// we can sum quantity. Kept separate from the wide shallow search so the
+// first:25 search stays under the complexity budget. We still search by
+// invoice text and filter by exact visualId — Printavo's fuzzy search
+// can outrank the true match, so we can't trust first:1.
+const QUANTITY_DETAIL_FIELDS = `
+  visualId
+  lineItemGroups {
+    nodes {
+      lineItems {
+        nodes {
+          sizes { count }
         }
       }
     }
@@ -85,6 +103,18 @@ function buildSearchQuery(invoice: string): string {
   }`;
 }
 
+function buildQuantityQuery(invoice: string): string {
+  const safe = invoice.replace(/"/g, '');
+  return `{
+    orders(first: 10, query: "${safe}") {
+      nodes {
+        ... on Quote { ${QUANTITY_DETAIL_FIELDS} }
+        ... on Invoice { ${QUANTITY_DETAIL_FIELDS} }
+      }
+    }
+  }`;
+}
+
 function extractDecorations(order: PrintavoOrder): ExtractedDecoration[] {
   const out: ExtractedDecoration[] = [];
   const seen = new Set<string>();
@@ -108,10 +138,83 @@ function extractDecorations(order: PrintavoOrder): ExtractedDecoration[] {
   return out;
 }
 
-// Phase 0: Printavo totalQuantity dropped from the query to stay under
-// complexity. Always returns 0 — UI can show blank / "—" for qty.
-function totalQuantity(_order: PrintavoOrder): number {
-  return 0;
+interface QuantityNode {
+  visualId: string;
+  lineItemGroups?: {
+    nodes: Array<{
+      lineItems?: {
+        nodes: Array<{ sizes?: Array<{ count: number | null }> }>;
+      };
+    }>;
+  };
+}
+
+/**
+ * Second call after a confirmed match: fetch sizes for the invoice and
+ * sum counts. Never throws; returns null on any failure so the caller
+ * can still persist the shallow match. Always logs a line so we can
+ * trace missing/zero quantities later.
+ */
+async function fetchQuantityForInvoice(invoice: string): Promise<number | null> {
+  try {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        email: API_EMAIL,
+        token: API_TOKEN,
+      },
+      body: JSON.stringify({ query: buildQuantityQuery(invoice) }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) {
+      console.warn(`[printavo] qty HTTP ${res.status} for invoice "${invoice}"`);
+      return null;
+    }
+    const json: any = await res.json();
+    if (json.errors) {
+      console.warn(
+        `[printavo] qty GraphQL errors for "${invoice}":`,
+        JSON.stringify(json.errors).slice(0, 300),
+      );
+      return null;
+    }
+    const nodes = (json?.data?.orders?.nodes ?? []) as QuantityNode[];
+    const match = nodes.find((n) => String(n?.visualId ?? '') === invoice);
+    if (!match) {
+      console.warn(
+        `[printavo] qty call: no visualId match for "${invoice}" in ${nodes.length} results`,
+      );
+      return null;
+    }
+    let total = 0;
+    let lineItems = 0;
+    let sizeRows = 0;
+    for (const g of match.lineItemGroups?.nodes ?? []) {
+      for (const li of g.lineItems?.nodes ?? []) {
+        lineItems++;
+        for (const s of li.sizes ?? []) {
+          sizeRows++;
+          if (typeof s.count === 'number' && s.count > 0) total += s.count;
+        }
+      }
+    }
+    console.log(
+      `[printavo] qty invoice="${invoice}" total=${total} lineItems=${lineItems} sizes=${sizeRows}`,
+    );
+    if (total === 0) {
+      console.warn(
+        `[printavo] qty resolved to 0 for invoice "${invoice}" (lineItems=${lineItems}, sizes=${sizeRows})`,
+      );
+    }
+    return total;
+  } catch (err: any) {
+    console.warn(
+      `[printavo] qty fetch failed for "${invoice}":`,
+      err?.message ?? String(err),
+    );
+    return null;
+  }
 }
 
 /**
@@ -165,10 +268,11 @@ export async function lookupPrintavoInvoice(
       return { ok: false, error: 'Invoice not found' };
     }
 
+    const qty = await fetchQuantityForInvoice(invoice);
     return {
       ok: true,
       order: node,
-      totalQuantity: totalQuantity(node),
+      totalQuantity: qty ?? undefined,
       jobName: node.nickname ?? undefined,
       decorations: extractDecorations(node),
     };

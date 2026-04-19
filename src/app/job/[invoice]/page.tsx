@@ -38,6 +38,14 @@ export default function JobPage({
   const [busy, setBusy] = useState(false);
   const [repullBusy, setRepullBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editLocation, setEditLocation] = useState('');
+  const [editMethod, setEditMethod] = useState('Screen Print');
+  const [editColorCount, setEditColorCount] = useState('');
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const METHOD_OPTIONS = ['Screen Print', 'DTG', 'Transfer', 'Embroidery', 'Other'];
 
   async function load() {
     setLoading(true);
@@ -91,6 +99,50 @@ export default function JobPage({
     router.push(
       `/job/${encodeURIComponent(invoice)}/${id}/phase?press=${encodeURIComponent(press)}`,
     );
+  }
+
+  function openEdit(d: Decoration) {
+    setEditingId(d.id);
+    setEditLocation(d.location);
+    const known = METHOD_OPTIONS.includes(d.method ?? '');
+    setEditMethod(known ? (d.method as string) : d.method ? 'Other' : 'Screen Print');
+    setEditColorCount(d.colorCount != null ? String(d.colorCount) : '');
+    setEditError(null);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditError(null);
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (editingId == null) return;
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      const res = await fetch(
+        `/api/jobs/${encodeURIComponent(invoice)}/decorations/${editingId}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            location: editLocation,
+            method: editMethod || null,
+            colorCount: editColorCount === '' ? null : editColorCount,
+          }),
+        },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setEditError(data?.error ?? 'Save failed');
+        return;
+      }
+      setEditingId(null);
+      await load();
+    } finally {
+      setEditBusy(false);
+    }
   }
 
   async function repullPrintavo() {
@@ -210,17 +262,109 @@ export default function JobPage({
 
               <div className="flex flex-col gap-3">
                 {job.decorations.map((d) => (
-                  <button
+                  <div
                     key={d.id}
-                    onClick={() => pickDecoration(d.id)}
-                    className="text-left rounded-xl bg-white border-2 border-craft-grey/20 p-4 shadow-sm active:scale-[0.99]"
+                    className="rounded-xl bg-white border-2 border-craft-grey/20 shadow-sm overflow-hidden"
                   >
-                    <div className="text-xl font-extrabold">{d.location}</div>
-                    <div className="text-sm text-craft-grey mt-1">
-                      {d.method ?? 'Method not set'}
-                      {typeof d.colorCount === 'number' ? ` \u2022 ${d.colorCount} colors` : ''}
-                    </div>
-                  </button>
+                    {editingId === d.id ? (
+                      <form onSubmit={saveEdit} className="p-4 flex flex-col gap-3">
+                        <label className="block">
+                          <span className="text-xs font-semibold text-craft-grey">
+                            Location
+                          </span>
+                          <input
+                            autoFocus
+                            value={editLocation}
+                            onChange={(e) => setEditLocation(e.target.value)}
+                            className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-3 text-lg"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-xs font-semibold text-craft-grey">
+                            Method
+                          </span>
+                          <select
+                            value={editMethod}
+                            onChange={(e) => setEditMethod(e.target.value)}
+                            className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-3 text-lg bg-white"
+                          >
+                            {METHOD_OPTIONS.map((m) => (
+                              <option key={m}>{m}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block">
+                          <span className="text-xs font-semibold text-craft-grey">
+                            Color count (optional)
+                          </span>
+                          <input
+                            inputMode="numeric"
+                            value={editColorCount}
+                            onChange={(e) =>
+                              setEditColorCount(e.target.value.replace(/\D/g, ''))
+                            }
+                            className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-3 text-lg"
+                          />
+                        </label>
+                        {editError && (
+                          <div className="rounded-lg bg-red-50 border border-red-200 text-red-700 px-3 py-2 text-sm">
+                            {editError}
+                          </div>
+                        )}
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={cancelEdit}
+                            className="flex-1 h-12 rounded-xl border-2 border-craft-grey/30 text-craft-black font-bold"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={editBusy}
+                            className="flex-[2] h-12 rounded-xl bg-craft-cyan text-white font-extrabold active:scale-[0.99] disabled:opacity-60"
+                          >
+                            {editBusy ? 'Saving\u2026' : 'Save'}
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="flex items-stretch">
+                        <button
+                          onClick={() => pickDecoration(d.id)}
+                          className="flex-1 text-left p-4 active:scale-[0.99]"
+                        >
+                          <div className="text-xl font-extrabold">{d.location}</div>
+                          <div className="text-sm text-craft-grey mt-1">
+                            {d.method ?? 'Method not set'}
+                            {typeof d.colorCount === 'number'
+                              ? ` \u2022 ${d.colorCount} colors`
+                              : ''}
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => openEdit(d)}
+                          aria-label="Edit decoration"
+                          title="Edit decoration"
+                          className="w-14 flex items-center justify-center text-craft-grey hover:text-craft-cyan border-l border-craft-grey/20 active:scale-[0.95]"
+                        >
+                          <svg
+                            width="22"
+                            height="22"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M12 20h9" />
+                            <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                          </svg>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
 

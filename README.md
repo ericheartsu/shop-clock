@@ -43,10 +43,16 @@ See `prisma/schema.prisma`.
 ## API
 
 - `POST /api/jobs/lookup` `{ invoice }` -> cached or Printavo fetch
+- `POST /api/jobs/[invoice]/repull` -> force-refresh Printavo data on an existing job
 - `POST /api/jobs/[invoice]/decorations` `{ location, method, colorCount }`
+- `PATCH /api/jobs/[invoice]/decorations/[id]` `{ location?, method?, colorCount? }` -> edit an imported or manual decoration
 - `POST /api/clock/start` `{ invoice, decorationId, press, phase }`
 - `POST /api/clock/stop` `{ entryId, notes }`
 - `GET /api/active` — debug: list open (unstopped) entries
+
+## Printavo quantity
+
+Quantity is fetched via a second narrow GraphQL call (`lineItems.sizes.count`) after the wide match search confirms the `visualId`. Kept separate so the match search stays under the 25k complexity budget. Misses are logged to console (`[printavo] qty …`) with `total=0` warnings so low/zero quantities can be traced later.
 
 ## Deploying
 
