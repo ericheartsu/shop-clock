@@ -6,7 +6,11 @@ export const dynamic = 'force-dynamic';
 /**
  * POST /api/clock/resume
  * Body: { entryId: number }
- * Adds (now - pausedAt) to pausedDurationSec, clears pausedAt.
+ * Adds (now - pausedAt) to pausedDurationSec, clears pausedAt, and closes
+ * the open entry in pauseLog by filling resumedAt.
+ *
+ * pauseReason column is preserved as the MOST RECENT reason — the pauseLog
+ * is the full history.
  */
 export async function POST(req: Request) {
   let body: any;
@@ -37,11 +41,22 @@ export async function POST(req: Request) {
     Math.round((now.getTime() - entry.pausedAt.getTime()) / 1000),
   );
 
+  // Close the open pauseLog entry (last one with resumedAt == null).
+  const prevLog: any[] = Array.isArray(entry.pauseLog) ? (entry.pauseLog as any[]) : [];
+  const newLog = [...prevLog];
+  for (let i = newLog.length - 1; i >= 0; i--) {
+    if (newLog[i] && !newLog[i].resumedAt) {
+      newLog[i] = { ...newLog[i], resumedAt: now.toISOString() };
+      break;
+    }
+  }
+
   const updated = await prisma.phaseZeroTimeEntry.update({
     where: { id: entryId },
     data: {
       pausedAt: null,
       pausedDurationSec: entry.pausedDurationSec + addSec,
+      pauseLog: newLog,
     },
   });
   return NextResponse.json({ entry: updated });
