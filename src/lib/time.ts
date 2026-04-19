@@ -22,4 +22,6 @@ export interface ActiveClockPayload {
   pausedAt?: string | null;
   /** Cumulative paused seconds from all *completed* pause spans */
   pausedDurationSec?: number;
+  /** Resolved operator name from the PIN gate (display only — DB has the snapshot). */
+  operatorName?: string | null;
 }

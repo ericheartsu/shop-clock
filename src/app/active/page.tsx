@@ -8,6 +8,7 @@ import {
   formatDuration,
   type ActiveClockPayload,
 } from '@/lib/time';
+import { PAUSE_REASONS } from '@/lib/config';
 
 export default function ActivePage() {
   const router = useRouter();
@@ -18,6 +19,16 @@ export default function ActivePage() {
   const [pauseBusy, setPauseBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Pause-reason modal state.
+  const [pauseModalOpen, setPauseModalOpen] = useState(false);
+  const [pauseReason, setPauseReason] = useState<string>(PAUSE_REASONS[0]);
+  const [pauseReasonOther, setPauseReasonOther] = useState('');
+
+  // Stop modal state — captures session qty + scrap before firing the stop.
+  const [stopModalOpen, setStopModalOpen] = useState(false);
+  const [sessionQuantity, setSessionQuantity] = useState('');
+  const [scrapCount, setScrapCount] = useState('');
 
   useEffect(() => {
     try {
@@ -61,46 +72,45 @@ export default function ActivePage() {
     setActive(next);
   }
 
-  async function togglePause() {
+  function openPauseModal() {
     if (!active || pauseBusy) return;
+    setPauseReason(PAUSE_REASONS[0]);
+    setPauseReasonOther('');
+    setError(null);
+    setPauseModalOpen(true);
+  }
+
+  async function submitPause(e?: React.FormEvent) {
+    if (e) e.preventDefault();
+    if (!active) return;
+    if (pauseReason === 'Other' && !pauseReasonOther.trim()) {
+      setError('Please type a reason when you pick "Other"');
+      return;
+    }
     setPauseBusy(true);
     setError(null);
     try {
-      if (active.pausedAt) {
-        // Resume
-        const res = await fetch('/api/clock/resume', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ entryId: active.entryId }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          setError(data?.error ?? 'Failed to resume');
-          return;
-        }
-        persist({
-          ...active,
-          pausedAt: null,
-          pausedDurationSec: data.entry.pausedDurationSec ?? active.pausedDurationSec ?? 0,
-        });
-      } else {
-        // Pause
-        const res = await fetch('/api/clock/pause', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ entryId: active.entryId }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          setError(data?.error ?? 'Failed to pause');
-          return;
-        }
-        persist({
-          ...active,
-          pausedAt: data.entry.pausedAt ?? new Date().toISOString(),
-          pausedDurationSec: data.entry.pausedDurationSec ?? active.pausedDurationSec ?? 0,
-        });
+      const res = await fetch('/api/clock/pause', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entryId: active.entryId,
+          reason: pauseReason,
+          reasonOther: pauseReason === 'Other' ? pauseReasonOther.trim() : null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data?.error ?? 'Failed to pause');
+        return;
       }
+      persist({
+        ...active,
+        pausedAt: data.entry.pausedAt ?? new Date().toISOString(),
+        pausedDurationSec:
+          data.entry.pausedDurationSec ?? active.pausedDurationSec ?? 0,
+      });
+      setPauseModalOpen(false);
     } catch (err: any) {
       setError(err?.message ?? 'Network error');
     } finally {
@@ -108,7 +118,44 @@ export default function ActivePage() {
     }
   }
 
-  async function stop() {
+  async function resume() {
+    if (!active || pauseBusy) return;
+    setPauseBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/clock/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entryId: active.entryId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data?.error ?? 'Failed to resume');
+        return;
+      }
+      persist({
+        ...active,
+        pausedAt: null,
+        pausedDurationSec:
+          data.entry.pausedDurationSec ?? active.pausedDurationSec ?? 0,
+      });
+    } catch (err: any) {
+      setError(err?.message ?? 'Network error');
+    } finally {
+      setPauseBusy(false);
+    }
+  }
+
+  function openStopModal() {
+    if (!active) return;
+    setSessionQuantity('');
+    setScrapCount('');
+    setError(null);
+    setStopModalOpen(true);
+  }
+
+  async function submitStop(e?: React.FormEvent) {
+    if (e) e.preventDefault();
     if (!active) return;
     setBusy(true);
     setError(null);
@@ -119,6 +166,8 @@ export default function ActivePage() {
         body: JSON.stringify({
           entryId: active.entryId,
           notes: notes.trim() || null,
+          sessionQuantity: sessionQuantity === '' ? null : Number(sessionQuantity),
+          scrapCount: scrapCount === '' ? null : Number(scrapCount),
         }),
       });
       const data = await res.json();
@@ -166,6 +215,11 @@ export default function ActivePage() {
           <div className="text-lg font-bold text-white/80 mt-1">
             {active.press} {'\u2022'} Invoice {active.invoice}
           </div>
+          {active.operatorName && (
+            <div className="text-sm font-semibold text-craft-lime mt-1">
+              Operator: {active.operatorName}
+            </div>
+          )}
         </div>
 
         <div className="text-center">
@@ -193,7 +247,7 @@ export default function ActivePage() {
           />
         </label>
 
-        {error && (
+        {error && !pauseModalOpen && !stopModalOpen && (
           <div className="rounded-lg bg-red-500/20 border border-red-400 text-red-100 px-3 py-2 text-sm">
             {error}
           </div>
@@ -201,7 +255,7 @@ export default function ActivePage() {
 
         <div className="w-full max-w-md flex gap-3">
           <button
-            onClick={togglePause}
+            onClick={isPaused ? resume : openPauseModal}
             disabled={busy || pauseBusy}
             className={
               'h-24 flex-1 rounded-2xl text-2xl font-extrabold shadow-xl active:scale-[0.98] disabled:opacity-60 ' +
@@ -217,7 +271,7 @@ export default function ActivePage() {
               : 'PAUSE'}
           </button>
           <button
-            onClick={stop}
+            onClick={openStopModal}
             disabled={busy}
             className="h-24 flex-[2] rounded-2xl bg-red-600 hover:bg-red-700 text-white text-4xl font-extrabold shadow-2xl active:scale-[0.98] disabled:opacity-60"
           >
@@ -225,6 +279,139 @@ export default function ActivePage() {
           </button>
         </div>
       </div>
+
+      {pauseModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+          <form
+            onSubmit={submitPause}
+            className="w-full max-w-md rounded-2xl bg-white text-craft-black shadow-2xl p-5 flex flex-col gap-4"
+          >
+            <div>
+              <div className="text-craft-grey text-xs font-semibold uppercase tracking-wide">
+                Why are you pausing?
+              </div>
+              <div className="text-xl font-extrabold">Pick a reason</div>
+            </div>
+            <select
+              autoFocus
+              value={pauseReason}
+              onChange={(e) => setPauseReason(e.target.value)}
+              className="w-full rounded-xl border-2 border-craft-grey/20 px-3 py-4 text-lg bg-white"
+            >
+              {PAUSE_REASONS.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+            {pauseReason === 'Other' && (
+              <label className="block">
+                <span className="text-xs font-semibold text-craft-grey">
+                  Custom reason
+                </span>
+                <input
+                  value={pauseReasonOther}
+                  onChange={(e) => setPauseReasonOther(e.target.value)}
+                  placeholder="What's going on?"
+                  className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-3 text-lg"
+                />
+              </label>
+            )}
+            {error && (
+              <div className="rounded-lg bg-red-50 border border-red-200 text-red-700 px-3 py-2 text-sm">
+                {error}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setPauseModalOpen(false)}
+                disabled={pauseBusy}
+                className="flex-1 h-14 rounded-xl border-2 border-craft-grey/30 font-bold active:scale-[0.99] disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={pauseBusy}
+                className="flex-[2] h-14 rounded-xl bg-craft-orange text-white font-extrabold text-lg active:scale-[0.99] disabled:opacity-60"
+              >
+                {pauseBusy ? 'Pausing\u2026' : 'Pause clock'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {stopModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+          <form
+            onSubmit={submitStop}
+            className="w-full max-w-md rounded-2xl bg-white text-craft-black shadow-2xl p-5 flex flex-col gap-4"
+          >
+            <div>
+              <div className="text-craft-grey text-xs font-semibold uppercase tracking-wide">
+                Wrapping up
+              </div>
+              <div className="text-xl font-extrabold">Session output</div>
+              <div className="text-craft-grey text-sm mt-1">
+                Both are optional. Skip either one by leaving it blank.
+              </div>
+            </div>
+            <label className="block">
+              <span className="text-xs font-semibold text-craft-grey">
+                How many did you print this session?
+              </span>
+              <input
+                autoFocus
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={sessionQuantity}
+                onChange={(e) =>
+                  setSessionQuantity(e.target.value.replace(/\D/g, ''))
+                }
+                placeholder="0"
+                className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-4 text-2xl font-bold text-center"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-semibold text-craft-grey">
+                Scrap / misprints (optional)
+              </span>
+              <input
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={scrapCount}
+                onChange={(e) => setScrapCount(e.target.value.replace(/\D/g, ''))}
+                placeholder="0"
+                className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-4 text-2xl font-bold text-center"
+              />
+            </label>
+            {error && (
+              <div className="rounded-lg bg-red-50 border border-red-200 text-red-700 px-3 py-2 text-sm">
+                {error}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setStopModalOpen(false)}
+                disabled={busy}
+                className="flex-1 h-14 rounded-xl border-2 border-craft-grey/30 font-bold active:scale-[0.99] disabled:opacity-60"
+              >
+                Back
+              </button>
+              <button
+                type="submit"
+                disabled={busy}
+                className="flex-[2] h-14 rounded-xl bg-red-600 text-white font-extrabold text-lg active:scale-[0.99] disabled:opacity-60"
+              >
+                {busy ? 'Stopping\u2026' : 'Stop clock'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </main>
   );
 }

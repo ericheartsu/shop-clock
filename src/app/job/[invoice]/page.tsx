@@ -3,11 +3,17 @@
 import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { BrandHeader } from '@/components/BrandHeader';
-import { PRESSES, type Press } from '@/lib/config';
+import {
+  PRESSES,
+  METHODS,
+  LOCATIONS,
+  type Press,
+} from '@/lib/config';
 
 interface Decoration {
   id: number;
   location: string;
+  locationOther: string | null;
   method: string | null;
   colorCount: number | null;
 }
@@ -15,9 +21,16 @@ interface Job {
   id: number;
   printavoInvoiceNumber: string;
   jobName: string | null;
+  customerName: string | null;
   totalQuantity: number | null;
   printavoFetched: boolean;
+  hqOrderHint: string | null;
   decorations: Decoration[];
+}
+
+function decorationLabel(d: Decoration): string {
+  if (d.location === 'Other') return d.locationOther ?? 'Other';
+  return d.location;
 }
 
 export default function JobPage({
@@ -31,21 +44,28 @@ export default function JobPage({
   const [loading, setLoading] = useState(true);
   const [press, setPress] = useState<Press>(PRESSES[0]);
   const [showAdd, setShowAdd] = useState(false);
-  const [location, setLocation] = useState('');
-  const [method, setMethod] = useState('Screen Print');
+  const [location, setLocation] = useState<string>(LOCATIONS[0]);
+  const [locationOther, setLocationOther] = useState('');
+  const [method, setMethod] = useState<string>(METHODS[0]);
   const [colorCount, setColorCount] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [repullBusy, setRepullBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editLocation, setEditLocation] = useState('');
-  const [editMethod, setEditMethod] = useState('Screen Print');
+  const [editLocation, setEditLocation] = useState<string>(LOCATIONS[0]);
+  const [editLocationOther, setEditLocationOther] = useState('');
+  const [editMethod, setEditMethod] = useState<string>(METHODS[0]);
   const [editColorCount, setEditColorCount] = useState('');
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
-  const METHOD_OPTIONS = ['Screen Print', 'DTG', 'Transfer', 'Embroidery', 'Other'];
+  // Job meta edits (customer name + HQ order hint)
+  const [metaEditing, setMetaEditing] = useState(false);
+  const [metaCustomer, setMetaCustomer] = useState('');
+  const [metaHqHint, setMetaHqHint] = useState('');
+  const [metaBusy, setMetaBusy] = useState(false);
+  const [metaError, setMetaError] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -76,6 +96,7 @@ export default function JobPage({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             location,
+            locationOther: location === 'Other' ? locationOther : null,
             method: method || null,
             colorCount: colorCount || null,
           }),
@@ -86,7 +107,8 @@ export default function JobPage({
         setError(data?.error ?? 'Failed to add');
         return;
       }
-      setLocation('');
+      setLocation(LOCATIONS[0]);
+      setLocationOther('');
       setColorCount('');
       setShowAdd(false);
       await load();
@@ -104,8 +126,8 @@ export default function JobPage({
   function openEdit(d: Decoration) {
     setEditingId(d.id);
     setEditLocation(d.location);
-    const known = METHOD_OPTIONS.includes(d.method ?? '');
-    setEditMethod(known ? (d.method as string) : d.method ? 'Other' : 'Screen Print');
+    setEditLocationOther(d.locationOther ?? '');
+    setEditMethod(d.method ?? METHODS[0]);
     setEditColorCount(d.colorCount != null ? String(d.colorCount) : '');
     setEditError(null);
   }
@@ -128,6 +150,7 @@ export default function JobPage({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             location: editLocation,
+            locationOther: editLocation === 'Other' ? editLocationOther : null,
             method: editMethod || null,
             colorCount: editColorCount === '' ? null : editColorCount,
           }),
@@ -142,6 +165,39 @@ export default function JobPage({
       await load();
     } finally {
       setEditBusy(false);
+    }
+  }
+
+  function openMetaEdit() {
+    if (!job) return;
+    setMetaCustomer(job.customerName ?? '');
+    setMetaHqHint(job.hqOrderHint ?? '');
+    setMetaError(null);
+    setMetaEditing(true);
+  }
+
+  async function saveMeta(e: React.FormEvent) {
+    e.preventDefault();
+    setMetaBusy(true);
+    setMetaError(null);
+    try {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(invoice)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerName: metaCustomer.trim() || null,
+          hqOrderHint: metaHqHint.trim() || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMetaError(data?.error ?? 'Save failed');
+        return;
+      }
+      setMetaEditing(false);
+      await load();
+    } finally {
+      setMetaBusy(false);
     }
   }
 
@@ -187,7 +243,12 @@ export default function JobPage({
               {job.jobName && (
                 <div className="text-craft-grey text-sm mt-1">{job.jobName}</div>
               )}
-              <div className="flex gap-3 mt-2 text-sm items-center">
+              {job.customerName && (
+                <div className="text-craft-black text-sm mt-1 font-semibold">
+                  {job.customerName}
+                </div>
+              )}
+              <div className="flex gap-3 mt-2 text-sm items-center flex-wrap">
                 {typeof job.totalQuantity === 'number' && (
                   <span className="rounded-full bg-craft-cyan/10 text-craft-cyan px-2 py-0.5 font-semibold">
                     Qty {job.totalQuantity}
@@ -203,6 +264,11 @@ export default function JobPage({
                 >
                   {job.printavoFetched ? 'Printavo linked' : 'Manual entry'}
                 </span>
+                {job.hqOrderHint && (
+                  <span className="rounded-full bg-craft-grey/10 text-craft-grey px-2 py-0.5 font-semibold">
+                    HQ hint: {job.hqOrderHint}
+                  </span>
+                )}
                 <button
                   onClick={repullPrintavo}
                   disabled={repullBusy}
@@ -212,6 +278,62 @@ export default function JobPage({
                   {repullBusy ? 'Pulling\u2026' : 'Re-pull Printavo'}
                 </button>
               </div>
+
+              {!metaEditing ? (
+                <button
+                  onClick={openMetaEdit}
+                  className="mt-3 text-xs font-bold text-craft-cyan hover:underline"
+                >
+                  Edit customer + HQ hint
+                </button>
+              ) : (
+                <form onSubmit={saveMeta} className="mt-3 flex flex-col gap-2">
+                  <label className="block">
+                    <span className="text-xs font-semibold text-craft-grey">
+                      Customer / company name
+                    </span>
+                    <input
+                      value={metaCustomer}
+                      onChange={(e) => setMetaCustomer(e.target.value)}
+                      placeholder="Auto-filled from Printavo — override here"
+                      className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-2"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-semibold text-craft-grey">
+                      HQ order# (optional — helps reconcile, not required)
+                    </span>
+                    <input
+                      value={metaHqHint}
+                      onChange={(e) => setMetaHqHint(e.target.value)}
+                      placeholder="e.g. ORD-12345"
+                      className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-2"
+                    />
+                  </label>
+                  {metaError && (
+                    <div className="rounded-lg bg-red-50 border border-red-200 text-red-700 px-3 py-2 text-sm">
+                      {metaError}
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMetaEditing(false)}
+                      className="flex-1 h-10 rounded-lg border-2 border-craft-grey/30 font-bold text-sm"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={metaBusy}
+                      className="flex-[2] h-10 rounded-lg bg-craft-cyan text-white font-extrabold text-sm active:scale-[0.99] disabled:opacity-60"
+                    >
+                      {metaBusy ? 'Saving\u2026' : 'Save'}
+                    </button>
+                  </div>
+                </form>
+              )}
+
               {toast && (
                 <div className="mt-2 rounded-lg bg-craft-lime/20 border border-craft-lime text-craft-black px-3 py-2 text-xs font-semibold">
                   {toast}
@@ -244,7 +366,7 @@ export default function JobPage({
             <section>
               <div className="flex items-end justify-between mb-2">
                 <div className="text-craft-grey text-xs font-semibold uppercase tracking-wide">
-                  Decorations — tap one to clock
+                  Decorations {'\u2014'} tap one to clock
                 </div>
                 <button
                   onClick={() => setShowAdd((v) => !v)}
@@ -272,13 +394,30 @@ export default function JobPage({
                           <span className="text-xs font-semibold text-craft-grey">
                             Location
                           </span>
-                          <input
+                          <select
                             autoFocus
                             value={editLocation}
                             onChange={(e) => setEditLocation(e.target.value)}
-                            className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-3 text-lg"
-                          />
+                            className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-3 text-lg bg-white"
+                          >
+                            {LOCATIONS.map((l) => (
+                              <option key={l} value={l}>{l}</option>
+                            ))}
+                          </select>
                         </label>
+                        {editLocation === 'Other' && (
+                          <label className="block">
+                            <span className="text-xs font-semibold text-craft-grey">
+                              Custom location label
+                            </span>
+                            <input
+                              value={editLocationOther}
+                              onChange={(e) => setEditLocationOther(e.target.value)}
+                              placeholder="e.g. Collar, Back Yoke"
+                              className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-3 text-lg"
+                            />
+                          </label>
+                        )}
                         <label className="block">
                           <span className="text-xs font-semibold text-craft-grey">
                             Method
@@ -288,8 +427,8 @@ export default function JobPage({
                             onChange={(e) => setEditMethod(e.target.value)}
                             className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-3 text-lg bg-white"
                           >
-                            {METHOD_OPTIONS.map((m) => (
-                              <option key={m}>{m}</option>
+                            {METHODS.map((m) => (
+                              <option key={m} value={m}>{m}</option>
                             ))}
                           </select>
                         </label>
@@ -334,7 +473,7 @@ export default function JobPage({
                           onClick={() => pickDecoration(d.id)}
                           className="flex-1 text-left p-4 active:scale-[0.99]"
                         >
-                          <div className="text-xl font-extrabold">{d.location}</div>
+                          <div className="text-xl font-extrabold">{decorationLabel(d)}</div>
                           <div className="text-sm text-craft-grey mt-1">
                             {d.method ?? 'Method not set'}
                             {typeof d.colorCount === 'number'
@@ -377,14 +516,30 @@ export default function JobPage({
                     <span className="text-xs font-semibold text-craft-grey">
                       Location
                     </span>
-                    <input
+                    <select
                       autoFocus
                       value={location}
                       onChange={(e) => setLocation(e.target.value)}
-                      placeholder="Front, Back, Neck Tag\u2026"
-                      className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-3 text-lg"
-                    />
+                      className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-3 text-lg bg-white"
+                    >
+                      {LOCATIONS.map((l) => (
+                        <option key={l} value={l}>{l}</option>
+                      ))}
+                    </select>
                   </label>
+                  {location === 'Other' && (
+                    <label className="block">
+                      <span className="text-xs font-semibold text-craft-grey">
+                        Custom location label
+                      </span>
+                      <input
+                        value={locationOther}
+                        onChange={(e) => setLocationOther(e.target.value)}
+                        placeholder="e.g. Collar, Back Yoke"
+                        className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-3 text-lg"
+                      />
+                    </label>
+                  )}
                   <label className="block">
                     <span className="text-xs font-semibold text-craft-grey">
                       Method
@@ -394,11 +549,9 @@ export default function JobPage({
                       onChange={(e) => setMethod(e.target.value)}
                       className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-3 text-lg bg-white"
                     >
-                      <option>Screen Print</option>
-                      <option>DTG</option>
-                      <option>Transfer</option>
-                      <option>Embroidery</option>
-                      <option>Other</option>
+                      {METHODS.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
                     </select>
                   </label>
                   <label className="block">
