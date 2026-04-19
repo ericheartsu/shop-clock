@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { isValidLocation, isValidMethod } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +17,11 @@ export async function POST(
   }
 
   const location = String(body?.location ?? '').trim();
+  const locationOtherRaw = body?.locationOther;
+  const locationOther =
+    locationOtherRaw === undefined || locationOtherRaw === null
+      ? null
+      : String(locationOtherRaw).trim() || null;
   const method = body?.method ? String(body.method).trim() : null;
   const colorCountRaw = body?.colorCount;
   const colorCount =
@@ -25,6 +31,24 @@ export async function POST(
 
   if (!location) {
     return NextResponse.json({ error: 'Location is required' }, { status: 400 });
+  }
+  if (!isValidLocation(location)) {
+    return NextResponse.json(
+      { error: `Location "${location}" is not in the picklist` },
+      { status: 400 },
+    );
+  }
+  if (location === 'Other' && !locationOther) {
+    return NextResponse.json(
+      { error: 'When location is "Other", a custom label is required' },
+      { status: 400 },
+    );
+  }
+  if (method && !isValidMethod(method)) {
+    return NextResponse.json(
+      { error: `Method "${method}" is not in the picklist` },
+      { status: 400 },
+    );
   }
   if (colorCount !== null && (!Number.isFinite(colorCount) || colorCount < 0)) {
     return NextResponse.json({ error: 'Invalid colorCount' }, { status: 400 });
@@ -41,6 +65,7 @@ export async function POST(
     data: {
       jobId: job.id,
       location,
+      locationOther: location === 'Other' ? locationOther : null,
       method,
       colorCount,
     },

@@ -9,6 +9,21 @@ import {
 export const dynamic = 'force-dynamic';
 
 /**
+ * Pull a customer/company name out of a Printavo order if present. The
+ * snapshot shape varies slightly by endpoint — we look in a few common
+ * places and fall back to null. Extend here when we capture new fields.
+ */
+function extractCustomerName(pv: PrintavoLookupResult): string | null {
+  const order: any = pv.order ?? {};
+  return (
+    order?.customer?.companyName ??
+    order?.customer?.name ??
+    order?.contact?.fullName ??
+    null
+  );
+}
+
+/**
  * Upsert a job's decorations from a fresh Printavo pull.
  * Match by case-insensitive `location` so we don't create duplicates
  * if Printavo returns an imprint whose location already exists locally.
@@ -42,7 +57,11 @@ async function upsertDecorations(
     await prisma.phaseZeroDecoration.create({
       data: {
         jobId,
-        location: dec.location,
+        // Printavo locations are freeform — we store what came back as
+        // "Other" in the picklist sense, with the raw string kept in
+        // locationOther. The operator can re-map later from the job page.
+        location: 'Other',
+        locationOther: dec.location,
         method: dec.method,
       },
     });
@@ -88,6 +107,11 @@ export async function POST(req: Request) {
         data: {
           jobName: pv.jobName ?? existing.jobName,
           totalQuantity: pv.totalQuantity ?? existing.totalQuantity,
+          customerName: existing.customerName ?? extractCustomerName(pv),
+          // Only set snapshot on the first successful pull — immutable after
+          // clock-in even if the operator re-pulls later.
+          printavoSnapshot:
+            existing.printavoSnapshot ?? (pv.order as any) ?? undefined,
           printavoFetched: true,
         },
       });
@@ -118,6 +142,8 @@ export async function POST(req: Request) {
       printavoInvoiceNumber: invoice,
       jobName: pv.ok ? pv.jobName ?? null : null,
       totalQuantity: pv.ok ? pv.totalQuantity ?? null : null,
+      customerName: pv.ok ? extractCustomerName(pv) : null,
+      printavoSnapshot: pv.ok ? (pv.order as any) ?? undefined : undefined,
       printavoFetched: pv.ok,
     },
   });

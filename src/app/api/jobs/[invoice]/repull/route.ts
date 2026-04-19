@@ -3,9 +3,20 @@ import { prisma } from '@/lib/prisma';
 import {
   lookupPrintavoInvoice,
   type ExtractedDecoration,
+  type PrintavoLookupResult,
 } from '@/lib/printavo';
 
 export const dynamic = 'force-dynamic';
+
+function extractCustomerName(pv: PrintavoLookupResult): string | null {
+  const order: any = pv.order ?? {};
+  return (
+    order?.customer?.companyName ??
+    order?.customer?.name ??
+    order?.contact?.fullName ??
+    null
+  );
+}
 
 async function upsertDecorations(
   jobId: number,
@@ -14,10 +25,15 @@ async function upsertDecorations(
   if (!decorations.length) return;
   const existing = await prisma.phaseZeroDecoration.findMany({
     where: { jobId },
-    select: { id: true, location: true, method: true },
+    select: { id: true, location: true, locationOther: true, method: true },
   });
+  // Match against the visible label (location or, if Other, locationOther).
   const byKey = new Map(
-    existing.map((d) => [d.location.trim().toLowerCase(), d]),
+    existing.map((d) => {
+      const label =
+        d.location === 'Other' ? (d.locationOther ?? '').trim() : d.location;
+      return [label.toLowerCase(), d];
+    }),
   );
   for (const dec of decorations) {
     const key = dec.location.trim().toLowerCase();
@@ -32,7 +48,12 @@ async function upsertDecorations(
       continue;
     }
     await prisma.phaseZeroDecoration.create({
-      data: { jobId, location: dec.location, method: dec.method },
+      data: {
+        jobId,
+        location: 'Other',
+        locationOther: dec.location,
+        method: dec.method,
+      },
     });
   }
 }
@@ -42,6 +63,10 @@ async function upsertDecorations(
  * Force a fresh Printavo pull for an already-known invoice. Updates job
  * fields and upserts decorations. User-triggered (e.g. someone added
  * imprints in Printavo after our cache was built).
+ *
+ * printavoSnapshot is only written if the job has none yet — this
+ * preserves the original snapshot for any rows that were clocked in
+ * against earlier data, so reconciliation stays stable.
  */
 export async function POST(
   _req: Request,
@@ -68,6 +93,8 @@ export async function POST(
     data: {
       jobName: pv.jobName ?? job.jobName,
       totalQuantity: pv.totalQuantity ?? job.totalQuantity,
+      customerName: job.customerName ?? extractCustomerName(pv),
+      printavoSnapshot: job.printavoSnapshot ?? ((pv.order as any) ?? undefined),
       printavoFetched: true,
     },
   });
