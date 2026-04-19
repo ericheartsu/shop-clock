@@ -140,13 +140,25 @@ export default function OperatorsAdminPage() {
       <BrandHeader crumbs={['Admin', 'Operators']} />
 
       <div className="p-4 flex flex-col gap-4">
-        <section className="rounded-2xl bg-white border border-craft-grey/20 p-4 shadow-sm">
-          <h1 className="text-xl font-extrabold">Operators</h1>
-          <p className="text-craft-grey text-sm mt-1">
-            Operators type their 4-digit PIN at clock-in. History is snapshotted
-            on each time entry, so editing or rotating a PIN here does NOT
-            rewrite past rows.
-          </p>
+        <section className="rounded-2xl bg-white border border-craft-grey/20 p-4 shadow-sm flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-extrabold">Operators</h1>
+            <p className="text-craft-grey text-sm mt-1">
+              Operators type their 4-digit PIN at clock-in. History is
+              snapshotted on each time entry, so editing or rotating a PIN
+              here does NOT rewrite past rows.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              await fetch('/api/admin/logout', { method: 'POST' });
+              window.location.href = '/admin/login';
+            }}
+            className="shrink-0 text-xs font-semibold text-craft-grey border border-craft-grey/30 rounded-lg px-3 py-2 hover:bg-craft-grey/10"
+          >
+            Sign out
+          </button>
         </section>
 
         <section className="rounded-2xl bg-white border-2 border-craft-cyan/40 p-4">
