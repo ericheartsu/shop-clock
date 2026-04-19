@@ -6,13 +6,13 @@ export const dynamic = 'force-dynamic';
 
 /**
  * POST /api/clock/pause
- * Body: { entryId: number, reason: string, reasonOther?: string }
+ * Body: { entryId: number, reason?: string, reasonOther?: string }
  *
- * Sets pausedAt = now() and captures a pause reason. Reason is a picklist
- * value; "Other" requires reasonOther freeform text. Idempotent-ish: if
- * already paused, returns current state without clobbering the original
- * pausedAt (but does NOT let the operator change the reason mid-pause —
- * resume first, pause again with new reason).
+ * Halts the clock immediately. Reason is optional — operators can pause
+ * right away and fill the reason in the follow-up modal. Re-calling this
+ * on an already-paused entry with a reason updates the latest open
+ * pauseLog entry, so the async UI can submit the reason after the pause
+ * landed.
  */
 export async function POST(req: Request) {
   let body: any;
@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   }
 
   const entryId = Number(body?.entryId);
-  const reasonRaw = String(body?.reason ?? '').trim();
+  const reasonRaw = body?.reason ? String(body.reason).trim() : '';
   const reasonOther = body?.reasonOther
     ? String(body.reasonOther).trim()
     : null;
@@ -31,22 +31,17 @@ export async function POST(req: Request) {
   if (!Number.isFinite(entryId)) {
     return NextResponse.json({ error: 'Missing entryId' }, { status: 400 });
   }
-  if (!reasonRaw) {
-    return NextResponse.json(
-      { error: 'Pause reason is required' },
-      { status: 400 },
-    );
-  }
-  if (!isValidPauseReason(reasonRaw)) {
+  if (reasonRaw && !isValidPauseReason(reasonRaw)) {
     return NextResponse.json(
       { error: `Reason "${reasonRaw}" is not in the picklist` },
       { status: 400 },
     );
   }
-  const resolvedReason =
-    reasonRaw === 'Other'
+  const resolvedReason = reasonRaw
+    ? reasonRaw === 'Other'
       ? reasonOther || null
-      : reasonRaw;
+      : reasonRaw
+    : null;
   if (reasonRaw === 'Other' && !resolvedReason) {
     return NextResponse.json(
       { error: 'When reason is "Other", a custom reason is required' },
@@ -59,14 +54,27 @@ export async function POST(req: Request) {
   if (entry.endedAt) {
     return NextResponse.json({ error: 'Entry already stopped' }, { status: 400 });
   }
+
   if (entry.pausedAt) {
-    // Already paused — return as-is so the UI can sync.
-    return NextResponse.json({ entry });
+    // Already paused — fill in the reason on the latest open pauseLog entry
+    // if one was supplied. No-op if no reason provided.
+    if (!resolvedReason) return NextResponse.json({ entry });
+    const prevLog: any[] = Array.isArray(entry.pauseLog) ? (entry.pauseLog as any[]) : [];
+    const newLog = [...prevLog];
+    for (let i = newLog.length - 1; i >= 0; i--) {
+      if (newLog[i] && !newLog[i].resumedAt) {
+        newLog[i] = { ...newLog[i], reason: resolvedReason };
+        break;
+      }
+    }
+    const updated = await prisma.phaseZeroTimeEntry.update({
+      where: { id: entryId },
+      data: { pauseReason: resolvedReason, pauseLog: newLog },
+    });
+    return NextResponse.json({ entry: updated });
   }
 
   const pausedAt = new Date();
-
-  // Append an OPEN entry to pauseLog — resumedAt filled on resume.
   const prevLog: any[] = Array.isArray(entry.pauseLog) ? (entry.pauseLog as any[]) : [];
   const newLog = [
     ...prevLog,

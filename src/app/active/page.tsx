@@ -25,10 +25,12 @@ export default function ActivePage() {
   const [pauseReason, setPauseReason] = useState<string>(PAUSE_REASONS[0]);
   const [pauseReasonOther, setPauseReasonOther] = useState('');
 
-  // Stop modal state — captures session qty + scrap before firing the stop.
+  // Stop modal state — the clock has already stopped by the time this opens.
+  // Operator fills session qty + scrap, or skips.
   const [stopModalOpen, setStopModalOpen] = useState(false);
   const [sessionQuantity, setSessionQuantity] = useState('');
   const [scrapCount, setScrapCount] = useState('');
+  const [stoppedFrozen, setStoppedFrozen] = useState<number | null>(null);
 
   useEffect(() => {
     try {
@@ -46,6 +48,10 @@ export default function ActivePage() {
 
   useEffect(() => {
     if (!active) return;
+    if (stoppedFrozen !== null) {
+      setElapsed(stoppedFrozen);
+      return;
+    }
     const started = new Date(active.startedAt).getTime();
     const baseAccumulated = active.pausedDurationSec ?? 0;
     const pausedSince = active.pausedAt
@@ -55,7 +61,6 @@ export default function ActivePage() {
     const update = () => {
       const now = Date.now();
       const gross = (now - started) / 1000;
-      // Paused time = baseline + (now - pausedSince) if currently paused
       const currentPause = pausedSince ? (now - pausedSince) / 1000 : 0;
       const net = gross - baseAccumulated - currentPause;
       setElapsed(Math.max(0, net));
@@ -65,22 +70,48 @@ export default function ActivePage() {
     return () => {
       if (tickRef.current) clearInterval(tickRef.current);
     };
-  }, [active]);
+  }, [active, stoppedFrozen]);
 
   function persist(next: ActiveClockPayload) {
     localStorage.setItem(ACTIVE_CLOCK_KEY, JSON.stringify(next));
     setActive(next);
   }
 
-  function openPauseModal() {
+  // PAUSE flow: halt the clock immediately, THEN prompt for a reason. The
+  // modal just patches the reason onto the already-paused entry. Skipping
+  // the modal leaves reason=null on that pauseLog entry.
+  async function beginPause() {
     if (!active || pauseBusy) return;
-    setPauseReason(PAUSE_REASONS[0]);
-    setPauseReasonOther('');
+    setPauseBusy(true);
     setError(null);
-    setPauseModalOpen(true);
+    try {
+      const res = await fetch('/api/clock/pause', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entryId: active.entryId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data?.error ?? 'Failed to pause');
+        return;
+      }
+      persist({
+        ...active,
+        pausedAt: data.entry.pausedAt ?? new Date().toISOString(),
+        pausedDurationSec:
+          data.entry.pausedDurationSec ?? active.pausedDurationSec ?? 0,
+      });
+      setPauseReason(PAUSE_REASONS[0]);
+      setPauseReasonOther('');
+      setPauseModalOpen(true);
+    } catch (err: any) {
+      setError(err?.message ?? 'Network error');
+    } finally {
+      setPauseBusy(false);
+    }
   }
 
-  async function submitPause(e?: React.FormEvent) {
+  async function submitPauseReason(e?: React.FormEvent) {
     if (e) e.preventDefault();
     if (!active) return;
     if (pauseReason === 'Other' && !pauseReasonOther.trim()) {
@@ -101,15 +132,9 @@ export default function ActivePage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data?.error ?? 'Failed to pause');
+        setError(data?.error ?? 'Failed to save reason');
         return;
       }
-      persist({
-        ...active,
-        pausedAt: data.entry.pausedAt ?? new Date().toISOString(),
-        pausedDurationSec:
-          data.entry.pausedDurationSec ?? active.pausedDurationSec ?? 0,
-      });
       setPauseModalOpen(false);
     } catch (err: any) {
       setError(err?.message ?? 'Network error');
@@ -146,15 +171,56 @@ export default function ActivePage() {
     }
   }
 
-  function openStopModal() {
-    if (!active) return;
-    setSessionQuantity('');
-    setScrapCount('');
+  // STOP flow: halt the clock immediately, freeze the timer display, THEN
+  // prompt for session qty + scrap. Submitting the modal patches the
+  // already-stopped entry. Skipping leaves qty/scrap null — still valid.
+  async function beginStop() {
+    if (!active || busy) return;
+    setBusy(true);
     setError(null);
-    setStopModalOpen(true);
+    try {
+      const res = await fetch('/api/clock/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entryId: active.entryId,
+          notes: notes.trim() || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data?.error ?? 'Failed to stop');
+        return;
+      }
+      if (typeof data?.entry?.durationSec === 'number') {
+        setStoppedFrozen(data.entry.durationSec);
+      } else {
+        setStoppedFrozen(elapsed);
+      }
+      setSessionQuantity('');
+      setScrapCount('');
+      setStopModalOpen(true);
+    } catch (err: any) {
+      setError(err?.message ?? 'Network error');
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function submitStop(e?: React.FormEvent) {
+  function returnToPhasePicker() {
+    if (!active) return;
+    localStorage.removeItem(ACTIVE_CLOCK_KEY);
+    const { invoice, decorationId, press } = active;
+    if (decorationId != null) {
+      router.replace(
+        `/job/${encodeURIComponent(invoice)}/${decorationId}/phase?press=${encodeURIComponent(press)}`,
+      );
+    } else {
+      router.replace(`/job/${encodeURIComponent(invoice)}`);
+    }
+  }
+
+  async function submitStopDetails(e?: React.FormEvent) {
     if (e) e.preventDefault();
     if (!active) return;
     setBusy(true);
@@ -165,28 +231,16 @@ export default function ActivePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           entryId: active.entryId,
-          notes: notes.trim() || null,
           sessionQuantity: sessionQuantity === '' ? null : Number(sessionQuantity),
           scrapCount: scrapCount === '' ? null : Number(scrapCount),
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data?.error ?? 'Failed to stop');
+        setError(data?.error ?? 'Failed to save session output');
         return;
       }
-      localStorage.removeItem(ACTIVE_CLOCK_KEY);
-      // Return to the phase picker for the SAME decoration + press so the
-      // next natural action ("I just finished Setup, now run Production")
-      // is one tap away. Fix #5.
-      const { invoice, decorationId, press } = active;
-      if (decorationId != null) {
-        router.replace(
-          `/job/${encodeURIComponent(invoice)}/${decorationId}/phase?press=${encodeURIComponent(press)}`,
-        );
-      } else {
-        router.replace(`/job/${encodeURIComponent(invoice)}`);
-      }
+      returnToPhasePicker();
     } catch (err: any) {
       setError(err?.message ?? 'Network error');
     } finally {
@@ -255,7 +309,7 @@ export default function ActivePage() {
 
         <div className="w-full max-w-md flex gap-3">
           <button
-            onClick={isPaused ? resume : openPauseModal}
+            onClick={isPaused ? resume : beginPause}
             disabled={busy || pauseBusy}
             className={
               'h-24 flex-1 rounded-2xl text-2xl font-extrabold shadow-xl active:scale-[0.98] disabled:opacity-60 ' +
@@ -271,11 +325,11 @@ export default function ActivePage() {
               : 'PAUSE'}
           </button>
           <button
-            onClick={openStopModal}
-            disabled={busy}
+            onClick={beginStop}
+            disabled={busy || stoppedFrozen !== null}
             className="h-24 flex-[2] rounded-2xl bg-red-600 hover:bg-red-700 text-white text-4xl font-extrabold shadow-2xl active:scale-[0.98] disabled:opacity-60"
           >
-            {busy ? 'STOPPING\u2026' : 'STOP'}
+            {busy ? 'STOPPING\u2026' : stoppedFrozen !== null ? 'STOPPED' : 'STOP'}
           </button>
         </div>
       </div>
@@ -283,12 +337,12 @@ export default function ActivePage() {
       {pauseModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
           <form
-            onSubmit={submitPause}
+            onSubmit={submitPauseReason}
             className="w-full max-w-md rounded-2xl bg-white text-craft-black shadow-2xl p-5 flex flex-col gap-4"
           >
             <div>
               <div className="text-craft-grey text-xs font-semibold uppercase tracking-wide">
-                Why are you pausing?
+                Clock is paused. Log the reason.
               </div>
               <div className="text-xl font-extrabold">Pick a reason</div>
             </div>
@@ -329,14 +383,14 @@ export default function ActivePage() {
                 disabled={pauseBusy}
                 className="flex-1 h-14 rounded-xl border-2 border-craft-grey/30 font-bold active:scale-[0.99] disabled:opacity-60"
               >
-                Cancel
+                Skip
               </button>
               <button
                 type="submit"
                 disabled={pauseBusy}
                 className="flex-[2] h-14 rounded-xl bg-craft-orange text-white font-extrabold text-lg active:scale-[0.99] disabled:opacity-60"
               >
-                {pauseBusy ? 'Pausing\u2026' : 'Pause clock'}
+                {pauseBusy ? 'Saving\u2026' : 'Save reason'}
               </button>
             </div>
           </form>
@@ -346,16 +400,16 @@ export default function ActivePage() {
       {stopModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
           <form
-            onSubmit={submitStop}
+            onSubmit={submitStopDetails}
             className="w-full max-w-md rounded-2xl bg-white text-craft-black shadow-2xl p-5 flex flex-col gap-4"
           >
             <div>
               <div className="text-craft-grey text-xs font-semibold uppercase tracking-wide">
-                Wrapping up
+                Clock stopped. Log the session output.
               </div>
               <div className="text-xl font-extrabold">Session output</div>
               <div className="text-craft-grey text-sm mt-1">
-                Both are optional. Skip either one by leaving it blank.
+                Both are optional. Skip to finish without logging counts.
               </div>
             </div>
             <label className="block">
@@ -395,18 +449,18 @@ export default function ActivePage() {
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => setStopModalOpen(false)}
+                onClick={returnToPhasePicker}
                 disabled={busy}
                 className="flex-1 h-14 rounded-xl border-2 border-craft-grey/30 font-bold active:scale-[0.99] disabled:opacity-60"
               >
-                Back
+                Skip
               </button>
               <button
                 type="submit"
                 disabled={busy}
                 className="flex-[2] h-14 rounded-xl bg-red-600 text-white font-extrabold text-lg active:scale-[0.99] disabled:opacity-60"
               >
-                {busy ? 'Stopping\u2026' : 'Stop clock'}
+                {busy ? 'Saving\u2026' : 'Save output'}
               </button>
             </div>
           </form>

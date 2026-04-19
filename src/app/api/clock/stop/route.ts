@@ -54,7 +54,20 @@ export async function POST(req: Request) {
   const entry = await prisma.phaseZeroTimeEntry.findUnique({ where: { id: entryId } });
   if (!entry) return NextResponse.json({ error: 'Entry not found' }, { status: 404 });
   if (entry.endedAt) {
-    return NextResponse.json({ error: 'Entry already stopped', entry });
+    // Already stopped. Allow qty/scrap/notes patch so the operator can fill
+    // session output in the follow-up modal after the immediate stop.
+    const patch: Record<string, unknown> = {};
+    if (sessionQuantity !== null) patch.sessionQuantity = sessionQuantity;
+    if (scrapCount !== null) patch.scrapCount = scrapCount;
+    if (notes) patch.notes = notes;
+    if (Object.keys(patch).length === 0) {
+      return NextResponse.json({ entry });
+    }
+    const patched = await prisma.phaseZeroTimeEntry.update({
+      where: { id: entryId },
+      data: patch,
+    });
+    return NextResponse.json({ entry: patched });
   }
 
   const endedAt = new Date();
