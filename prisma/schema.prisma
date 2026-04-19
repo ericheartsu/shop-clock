@@ -11,6 +11,24 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// -----------------------------------------------------------------------------
+// Operator — the press operator who owns a time entry.
+//
+// PIN is editable from /admin/operators. History is preserved on each
+// PhaseZeroTimeEntry via operatorPinSnapshot + operatorNameSnapshot, so
+// renaming or rotating a PIN here does NOT retroactively change logged rows.
+// -----------------------------------------------------------------------------
+model Operator {
+  id        Int      @id @default(autoincrement())
+  name      String
+  pin       String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  timeEntries PhaseZeroTimeEntry[]
+}
+
 model PhaseZeroJob {
   id                    Int      @id @default(autoincrement())
   printavoInvoiceNumber String   @unique
@@ -18,6 +36,15 @@ model PhaseZeroJob {
   totalQuantity         Int?
   // true if we got real data from Printavo; false if user entered manually
   printavoFetched       Boolean  @default(false)
+  // Customer/company name — auto-filled from Printavo snapshot when available,
+  // manual override allowed from the job UI.
+  customerName          String?
+  // Full Printavo payload as of first successful fetch. Immutable after
+  // clock-in even if a subsequent repull overwrites job fields, so we can
+  // reconcile later with confidence.
+  printavoSnapshot      Json?
+  // Optional operator hint to help future reconcile against HQ Print orders.
+  hqOrderHint           String?
   createdAt             DateTime @default(now())
 
   decorations PhaseZeroDecoration[]
@@ -28,8 +55,15 @@ model PhaseZeroDecoration {
   id         Int      @id @default(autoincrement())
   jobId      Int
   job        PhaseZeroJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  location   String   // "Front", "Back", "Neck Tag", etc. — freeform for Phase 0
-  method     String?  // "Screen Print", "DTG", "Transfer", etc. — freeform
+  // Controlled-vocabulary location (see LOCATIONS in src/lib/config.ts).
+  // "Other" falls through to locationOther freeform text for back-compat.
+  location   String
+  // Optional freeform label used only when location == "Other".
+  locationOther String?
+  // Controlled-vocabulary method (see METHODS in src/lib/config.ts) — kept
+  // as String so we don't couple the DB to a Postgres enum. Validated in UI
+  // and API layer.
+  method     String?
   colorCount Int?
   createdAt  DateTime @default(now())
 
@@ -44,6 +78,13 @@ model PhaseZeroTimeEntry {
   job               PhaseZeroJob @relation(fields: [jobId], references: [id])
   decorationId      Int?
   decoration        PhaseZeroDecoration? @relation(fields: [decorationId], references: [id])
+  // Operator attribution — operatorId is the live FK, but the two snapshot
+  // columns freeze name + PIN at entry time so editing the Operator row
+  // never rewrites history.
+  operatorId           Int?
+  operator             Operator? @relation(fields: [operatorId], references: [id])
+  operatorNameSnapshot String?
+  operatorPinSnapshot  String?
   press             String   // one of PRESSES in src/lib/config.ts
   phase             String   // "Setup" | "Production" | "Teardown"
   startedAt         DateTime
@@ -53,10 +94,18 @@ model PhaseZeroTimeEntry {
   // pausedDurationSec accumulates whenever the user resumes.
   pausedAt          DateTime?
   pausedDurationSec Int      @default(0)
+  // Most recent pause reason (preserved after resume). pauseLog has the full
+  // history if multiple pauses occurred in this session.
+  pauseReason       String?
+  pauseLog          Json?
+  // End-of-session output counts. Both optional — operator can skip.
+  sessionQuantity   Int?
+  scrapCount        Int?
   notes             String?
   createdAt         DateTime @default(now())
 
   @@index([jobId])
   @@index([decorationId])
+  @@index([operatorId])
   @@index([press, phase])
 }
