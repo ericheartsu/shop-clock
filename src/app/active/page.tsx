@@ -220,6 +220,41 @@ export default function ActivePage() {
     }
   }
 
+  async function undoStop() {
+    if (!active || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/clock/undo-stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entryId: active.entryId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data?.error ?? 'Failed to undo stop');
+        return;
+      }
+      // Sync the active payload to the DB's post-undo state. Stop-while-paused
+      // folded the paused span into pausedDurationSec and cleared pausedAt;
+      // after undo the entry keeps that folded total and resumes as "running".
+      persist({
+        ...active,
+        pausedAt: null,
+        pausedDurationSec:
+          data.entry?.pausedDurationSec ?? active.pausedDurationSec ?? 0,
+      });
+      setStoppedFrozen(null);
+      setStopModalOpen(false);
+      setSessionQuantity('');
+      setScrapCount('');
+    } catch (err: any) {
+      setError(err?.message ?? 'Network error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submitStopDetails(e?: React.FormEvent) {
     if (e) e.preventDefault();
     if (!active) return;
@@ -411,6 +446,14 @@ export default function ActivePage() {
               <div className="text-craft-grey text-sm mt-1">
                 Both are optional. Skip to finish without logging counts.
               </div>
+              <button
+                type="button"
+                onClick={undoStop}
+                disabled={busy}
+                className="mt-2 text-xs font-bold text-craft-cyan hover:underline disabled:opacity-60"
+              >
+                {'\u2190'} Didn{"\u2019"}t mean to stop {'\u2014'} undo
+              </button>
             </div>
             <label className="block">
               <span className="text-xs font-semibold text-craft-grey">

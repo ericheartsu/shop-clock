@@ -127,7 +127,14 @@ export default function JobPage({
     setEditingId(d.id);
     setEditLocation(d.location);
     setEditLocationOther(d.locationOther ?? '');
-    setEditMethod(d.method ?? METHODS[0]);
+    // If the stored method isn't in the picklist (legacy Printavo value like
+    // "Screen Printing" or "Finishing"), blank the dropdown so the operator
+    // must actively pick a valid one — otherwise the <select> silently shows
+    // the first option while state holds the legacy string, and Save fails
+    // with "not in the picklist".
+    const storedMethod = d.method ?? '';
+    const methodIsValid = (METHODS as readonly string[]).includes(storedMethod);
+    setEditMethod(methodIsValid ? storedMethod : '');
     setEditColorCount(d.colorCount != null ? String(d.colorCount) : '');
     setEditError(null);
   }
@@ -427,10 +434,16 @@ export default function JobPage({
                             onChange={(e) => setEditMethod(e.target.value)}
                             className="mt-1 w-full rounded-lg border-2 border-craft-grey/20 px-3 py-3 text-lg bg-white"
                           >
+                            <option value="">{'\u2014 Pick one \u2014'}</option>
                             {METHODS.map((m) => (
                               <option key={m} value={m}>{m}</option>
                             ))}
                           </select>
+                          {d.method && !(METHODS as readonly string[]).includes(d.method) && (
+                            <div className="mt-1 text-xs text-craft-orange">
+                              Imported as {'"'}{d.method}{'"'} {'\u2014'} not a shop method. Pick one above.
+                            </div>
+                          )}
                         </label>
                         <label className="block">
                           <span className="text-xs font-semibold text-craft-grey">

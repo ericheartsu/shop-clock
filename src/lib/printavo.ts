@@ -115,6 +115,30 @@ function buildQuantityQuery(invoice: string): string {
   }`;
 }
 
+/**
+ * Map Printavo's typeOfWork.name to shop-clock's METHODS picklist.
+ * Printavo's catalog is broader (e.g. "Finishing", "Tag Print") and some
+ * names don't match our vocabulary exactly ("Screen Printing" vs "Screen
+ * Print"). Returns null for values we don't want to force into the picklist
+ * — operator can pick one in the edit dialog before clocking.
+ */
+function normalizePrintavoMethod(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const k = raw.trim().toLowerCase();
+  if (!k) return null;
+  // Exact and common variants for each picklist entry.
+  if (k === 'screen print' || k === 'screen printing' || k === 'screenprint' || k === 'screen-print') {
+    return 'Screen Print';
+  }
+  if (k === 'embroidery' || k === 'embroider' || k === 'embroidered') return 'Embroidery';
+  if (k === 'dtg' || k === 'direct to garment' || k === 'direct-to-garment') return 'DTG';
+  if (k === 'dtf' || k === 'direct to film' || k === 'direct-to-film') return 'DTF';
+  if (k === 'transfer' || k === 'heat transfer' || k === 'heat press') return 'Transfer';
+  if (k === 'sublimation' || k === 'dye sublimation') return 'Sublimation';
+  // "Finishing", "Tag Print", "DTG / DTF" (ambiguous) → operator must pick.
+  return null;
+}
+
 function extractDecorations(order: PrintavoOrder): ExtractedDecoration[] {
   const out: ExtractedDecoration[] = [];
   const seen = new Set<string>();
@@ -123,7 +147,7 @@ function extractDecorations(order: PrintavoOrder): ExtractedDecoration[] {
     for (const imp of g.imprints?.nodes ?? []) {
       const rawLocation = (imp.details ?? '').trim();
       const location = rawLocation || `Imprint ${n}`;
-      const method = imp.typeOfWork?.name?.trim() || null;
+      const method = normalizePrintavoMethod(imp.typeOfWork?.name);
 
       // dedupe on (location + method) to avoid creating duplicates if the
       // same design appears in multiple line item groups.
