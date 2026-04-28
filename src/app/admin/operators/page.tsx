@@ -19,6 +19,8 @@ export default function OperatorsAdminPage() {
   const [newName, setNewName] = useState('');
   const [newPin, setNewPin] = useState('');
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
@@ -47,6 +49,23 @@ export default function OperatorsAdminPage() {
   useEffect(() => {
     load();
   }, []);
+
+  async function syncFromHq() {
+    setSyncing(true);
+    setSyncResult(null);
+    setError(null);
+    try {
+      const res = await fetch('/api/operators/sync', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) { setError(data?.error ?? 'Sync failed'); return; }
+      setSyncResult(`Synced ${data.total} operators from HQ (${data.created} new, ${data.updated} updated).`);
+      await load();
+    } catch (err: any) {
+      setError(err?.message ?? 'Network error');
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   async function addOperator(e: React.FormEvent) {
     e.preventDefault();
@@ -141,24 +160,37 @@ export default function OperatorsAdminPage() {
 
       <div className="p-4 flex flex-col gap-4">
         <section className="rounded-2xl bg-white border border-craft-grey/20 p-4 shadow-sm flex items-start justify-between gap-4">
-          <div>
+          <div className="flex-1">
             <h1 className="text-xl font-extrabold">Operators</h1>
             <p className="text-craft-grey text-sm mt-1">
-              Operators type their 4-digit PIN at clock-in. History is
-              snapshotted on each time entry, so editing or rotating a PIN
-              here does NOT rewrite past rows.
+              HQ Print is the source of truth. Use <strong>Sync from HQ</strong> to
+              pull the latest operator list. Operators set their own PIN at{' '}
+              <a href="/change-pin" className="text-craft-cyan underline">/change-pin</a>.
             </p>
+            {syncResult && (
+              <p className="text-green-600 text-sm mt-2 font-medium">{syncResult}</p>
+            )}
           </div>
-          <button
-            type="button"
-            onClick={async () => {
-              await fetch('/api/admin/logout', { method: 'POST' });
-              window.location.href = '/admin/login';
-            }}
-            className="shrink-0 text-xs font-semibold text-craft-grey border border-craft-grey/30 rounded-lg px-3 py-2 hover:bg-craft-grey/10"
-          >
-            Sign out
-          </button>
+          <div className="flex flex-col gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={syncFromHq}
+              disabled={syncing}
+              className="text-sm font-bold text-white bg-craft-cyan rounded-lg px-4 py-2 hover:opacity-90 disabled:opacity-50"
+            >
+              {syncing ? 'Syncing…' : 'Sync from HQ'}
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                await fetch('/api/admin/logout', { method: 'POST' });
+                window.location.href = '/admin/login';
+              }}
+              className="text-xs font-semibold text-craft-grey border border-craft-grey/30 rounded-lg px-3 py-2 hover:bg-craft-grey/10"
+            >
+              Sign out
+            </button>
+          </div>
         </section>
 
         <section className="rounded-2xl bg-white border-2 border-craft-cyan/40 p-4">
@@ -270,7 +302,7 @@ export default function OperatorsAdminPage() {
                     <div className="flex-1 p-4">
                       <div className="text-xl font-extrabold">{op.name}</div>
                       <div className="text-sm text-craft-grey mt-1 flex items-center gap-2">
-                        <span className="font-mono tracking-widest">PIN {op.pin}</span>
+                        <span className="font-mono tracking-widest">PIN ••••</span>
                         <span
                           className={
                             'rounded-full px-2 py-0.5 text-xs font-bold ' +
