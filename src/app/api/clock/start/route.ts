@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { compare } from 'bcryptjs';
 import {
   isValidPhase,
   isValidPress,
@@ -56,8 +57,14 @@ export async function POST(req: Request) {
     );
   }
 
-  const operator = await prisma.operator.findUnique({ where: { pin: operatorPin } });
-  if (!operator || !operator.active) {
+  // PIN is now stored as a bcrypt hash (synced from HQ). Compare against all
+  // active operators — O(n) but fine for a small shop roster.
+  const activeOperators = await prisma.operator.findMany({ where: { active: true } });
+  let operator: typeof activeOperators[0] | null = null;
+  for (const op of activeOperators) {
+    if (await compare(operatorPin, op.pin)) { operator = op; break; }
+  }
+  if (!operator) {
     return NextResponse.json(
       { error: 'No active operator matches that PIN' },
       { status: 404 },

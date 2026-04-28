@@ -21,8 +21,11 @@ datasource db {
 model Operator {
   id        Int      @id @default(autoincrement())
   name      String
-  pin       String   @unique
+  pin       String   @unique // bcrypt hash of 4-digit PIN (synced from HQ scanPin)
   active    Boolean  @default(true)
+  // HQ User id — set after sync from HQ. Used as the stable identity key
+  // when firing time entries to the HQ ingest endpoint.
+  hqUserId  Int?     @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

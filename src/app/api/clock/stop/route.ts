@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { postToHq } from '@/lib/hq-ingest';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,7 +52,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Missing entryId' }, { status: 400 });
   }
 
-  const entry = await prisma.phaseZeroTimeEntry.findUnique({ where: { id: entryId } });
+  const entry = await prisma.phaseZeroTimeEntry.findUnique({
+    where: { id: entryId },
+    include: {
+      job: { select: { hqOrderHint: true } },
+      operator: { select: { hqUserId: true } },
+    },
+  });
   if (!entry) return NextResponse.json({ error: 'Entry not found' }, { status: 404 });
   if (entry.endedAt) {
     // Already stopped. Allow qty/scrap/notes patch so the operator can fill
@@ -110,6 +117,20 @@ export async function POST(req: Request) {
       sessionQuantity,
       scrapCount,
     },
+  });
+
+  // Fire-and-forget to HQ — never blocks the shop-floor response
+  postToHq({
+    hqUserId: entry.operator?.hqUserId ?? null,
+    orderNumber: entry.job?.hqOrderHint ?? null,
+    press: entry.press,
+    phase: entry.phase,
+    clockIn: entry.startedAt.toISOString(),
+    clockOut: endedAt.toISOString(),
+    pausedDurationSec,
+    sessionQuantity: sessionQuantity ?? null,
+    scrapCount: scrapCount ?? null,
+    notes: notes ?? null,
   });
 
   return NextResponse.json({ entry: updated });
