@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { compare } from 'bcryptjs';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,8 +9,7 @@ export const dynamic = 'force-dynamic';
  * Body: { pin: string }
  * Returns { operator } on match (active rows only), 404 on miss.
  *
- * Used by the clock-in PIN gate. Invalid PIN = explicit 404 with a clear
- * error — no silent fallback, no auto-create. Mismatches must surface.
+ * PINs are stored as bcrypt hashes — compare against all active operators.
  */
 export async function POST(req: Request) {
   let body: any;
@@ -27,8 +27,13 @@ export async function POST(req: Request) {
     );
   }
 
-  const operator = await prisma.operator.findUnique({ where: { pin } });
-  if (!operator || !operator.active) {
+  const activeOperators = await prisma.operator.findMany({ where: { active: true } });
+  let operator: typeof activeOperators[0] | null = null;
+  for (const op of activeOperators) {
+    if (await compare(pin, op.pin)) { operator = op; break; }
+  }
+
+  if (!operator) {
     return NextResponse.json(
       { error: 'No active operator matches that PIN' },
       { status: 404 },
